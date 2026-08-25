@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from conftest import make_cluster
 
 from gpu_scheduler_lab.models import GPU, Cluster, Job, Node, TopologyMode, topology_distance
@@ -51,8 +52,11 @@ def test_gpu_model_compatibility_is_centralized() -> None:
 def test_unschedulable_node_rejects_otherwise_compatible_gpu() -> None:
     cluster = make_cluster([[80]])
     cluster.nodes[0].schedulable = False
+    job = Job("job", 0, 1, 1, 20)
 
-    assert FIFOScheduler().place(cluster, Job("job", 0, 1, 1, 20)) is None
+    assert FIFOScheduler().place(cluster, job) is None
+    with pytest.raises(ValueError, match="unavailable"):
+        cluster.allocate(job, [cluster.nodes[0].gpus[0].id])
 
 
 def test_heterogeneous_model_gang_is_all_or_nothing() -> None:
@@ -71,6 +75,18 @@ def test_topology_distance_hierarchy() -> None:
     assert topology_distance("a", nodes["a"].topology, "b", nodes["b"].topology) == 1
     assert topology_distance("a", nodes["a"].topology, "c", nodes["c"].topology) == 2
     assert topology_distance("a", nodes["a"].topology, "d", nodes["d"].topology) == 3
+
+
+def test_same_rack_label_in_different_zones_is_cross_zone() -> None:
+    assert (
+        topology_distance(
+            "a",
+            {"zone": "z1", "rack": "shared-name"},
+            "b",
+            {"zone": "z2", "rack": "shared-name"},
+        )
+        == 3
+    )
 
 
 def test_topology_scheduler_enforces_require_same_rack() -> None:

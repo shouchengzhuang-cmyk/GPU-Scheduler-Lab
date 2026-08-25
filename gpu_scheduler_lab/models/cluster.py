@@ -71,6 +71,9 @@ class Cluster:
             raise ValueError("node ids must be unique")
         if len(set(gpu_ids)) != len(gpu_ids):
             raise ValueError("GPU ids must be unique")
+        for node in self.nodes:
+            if any(gpu.node_id != node.id for gpu in node.gpus):
+                raise ValueError(f"GPU node_id must match containing node {node.id}")
 
     @property
     def gpus(self) -> list[GPU]:
@@ -118,7 +121,8 @@ class Cluster:
         if len(selected_ids) != job.gpu_count or len(set(selected_ids)) != len(selected_ids):
             raise ValueError("placement must contain exactly the requested number of unique GPUs")
         selected = [self.gpu_by_id(gpu_id) for gpu_id in selected_ids]
-        if any(not gpu.can_host(job) for gpu in selected):
+        schedulable_ids = {gpu.id for gpu in self.schedulable_gpus}
+        if any(gpu.id not in schedulable_ids or not gpu.can_host(job) for gpu in selected):
             raise ValueError("placement contains an unavailable or undersized GPU")
         node_ids = [gpu.node_id for gpu in selected]
         topologies = {node.id: node.topology for node in self.nodes}

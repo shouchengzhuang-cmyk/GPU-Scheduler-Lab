@@ -17,6 +17,9 @@ def topology_domain(node_id: str, topology: dict[str, str], level: str) -> str:
         return node_id
     value = topology.get(level)
     if value:
+        if level == "rack":
+            zone = topology.get("zone")
+            return f"{zone}/{value}" if zone else value
         return value
     return f"__{level}_unknown__:{node_id}"
 
