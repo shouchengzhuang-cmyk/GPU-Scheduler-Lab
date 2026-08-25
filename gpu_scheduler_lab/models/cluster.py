@@ -12,6 +12,7 @@ class GPU:
     id: str
     node_id: str
     memory_capacity_gb: float
+    model: str = "generic"
     allocated_memory_gb: float = 0.0
     owner_job_id: str | None = None
 
@@ -20,6 +21,8 @@ class GPU:
             raise ValueError("gpu id must not be empty")
         if self.memory_capacity_gb <= 0:
             raise ValueError("GPU memory capacity must be positive")
+        if not self.model:
+            raise ValueError("GPU model must not be empty")
 
     @property
     def occupied(self) -> bool:
@@ -29,8 +32,16 @@ class GPU:
     def free(self) -> bool:
         return not self.occupied
 
-    def can_host(self, memory_gb: float) -> bool:
-        return self.free and memory_gb <= self.memory_capacity_gb
+    def is_compatible(self, request: Job | float) -> bool:
+        if isinstance(request, Job):
+            model_allowed = (request.gpu_model is None or self.model == request.gpu_model) and (
+                not request.allowed_gpu_models or self.model in request.allowed_gpu_models
+            )
+            return model_allowed and request.gpu_memory_gb <= self.memory_capacity_gb
+        return request <= self.memory_capacity_gb
+
+    def can_host(self, request: Job | float) -> bool:
+        return self.free and self.is_compatible(request)
 
 
 @dataclass(slots=True)
@@ -97,9 +108,9 @@ class Cluster:
                 return gpu
         raise KeyError(gpu_id)
 
-    def eligible_gpus(self, memory_gb: float) -> list[GPU]:
+    def eligible_gpus(self, request: Job | float) -> list[GPU]:
         return [
-            gpu for node in self.schedulable_nodes for gpu in node.gpus if gpu.can_host(memory_gb)
+            gpu for node in self.schedulable_nodes for gpu in node.gpus if gpu.can_host(request)
         ]
 
     def allocate(self, job: Job, gpu_ids: Iterable[str]) -> None:
@@ -107,8 +118,14 @@ class Cluster:
         if len(selected_ids) != job.gpu_count or len(set(selected_ids)) != len(selected_ids):
             raise ValueError("placement must contain exactly the requested number of unique GPUs")
         selected = [self.gpu_by_id(gpu_id) for gpu_id in selected_ids]
-        if any(not gpu.can_host(job.gpu_memory_gb) for gpu in selected):
+        if any(not gpu.can_host(job) for gpu in selected):
             raise ValueError("placement contains an unavailable or undersized GPU")
+        node_ids = [gpu.node_id for gpu in selected]
+        topologies = {node.id: node.topology for node in self.nodes}
+        from gpu_scheduler_lab.models.topology import topology_requirement_satisfied
+
+        if not topology_requirement_satisfied(job.topology_mode, node_ids, topologies):
+            raise ValueError("placement violates the job topology requirement")
         for gpu in selected:
             gpu.owner_job_id = job.id
             gpu.allocated_memory_gb = job.gpu_memory_gb
@@ -134,7 +151,7 @@ class Cluster:
                 raise AssertionError(f"duplicate GPU id {gpu.id}")
             seen.add(gpu.id)
 
-    def clone(self) -> Cluster:
+    def clone(self, *, preserve_allocations: bool = False) -> Cluster:
         return Cluster(
             nodes=[
                 Node(
@@ -146,6 +163,11 @@ class Cluster:
                             id=gpu.id,
                             node_id=gpu.node_id,
                             memory_capacity_gb=gpu.memory_capacity_gb,
+                            model=gpu.model,
+                            allocated_memory_gb=(
+                                gpu.allocated_memory_gb if preserve_allocations else 0.0
+                            ),
+                            owner_job_id=gpu.owner_job_id if preserve_allocations else None,
                         )
                         for gpu in node.gpus
                     ],
@@ -164,6 +186,7 @@ class Cluster:
                     id=str(gpu_data.get("id", f"{node_id}-gpu-{index}")),
                     node_id=node_id,
                     memory_capacity_gb=float(gpu_data["memory_gb"]),
+                    model=str(gpu_data.get("model", "generic")),
                 )
                 for index, gpu_data in enumerate(node_data.get("gpus", []))
             ]

@@ -1,0 +1,35 @@
+metadata:
+  description: Spread versus topology-aware same-rack gang placement
+  seed: 0
+nodes:
+  - id: node-a
+    topology: {zone: zone-1, rack: rack-1}
+    gpus:
+      - {id: a-0, model: A10, memory_gb: 24}
+      - {id: a-1, model: A10, memory_gb: 24}
+  - id: node-b
+    topology: {zone: zone-1, rack: rack-1}
+    gpus:
+      - {id: b-0, model: A10, memory_gb: 24}
+      - {id: b-1, model: A10, memory_gb: 24}
+  - id: node-c
+    topology: {zone: zone-1, rack: rack-2}
+    gpus:
+      - {id: c-0, model: A10, memory_gb: 24}
+      - {id: c-1, model: A10, memory_gb: 24}
+  - id: node-d
+    topology: {zone: zone-1, rack: rack-2}
+    gpus:
+      - {id: d-0, model: A10, memory_gb: 24}
+      - {id: d-1, model: A10, memory_gb: 24}
+jobs:
+  - id: gang
+    arrival_time: 0
+    duration: 20
+    gpu_count: 4
+    gpu_memory_gb: 20
+    gpu_model: A10
+    priority: normal
+    type: training
+    gang: true
+    topology_mode: prefer_same_rack

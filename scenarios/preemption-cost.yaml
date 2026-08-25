@@ -1,0 +1,27 @@
+metadata:
+  description: High checkpoint and restart costs can outweigh preemption latency benefit
+  seed: 0
+nodes:
+  - id: node-a
+    topology: {zone: zone-1, rack: rack-1}
+    gpus:
+      - {id: a-0, model: A10, memory_gb: 24}
+jobs:
+  - id: low
+    arrival_time: 0
+    duration: 100
+    gpu_count: 1
+    gpu_memory_gb: 20
+    priority: low
+    type: training
+    gang: false
+    checkpoint_cost: 80
+    restart_cost: 80
+  - id: critical
+    arrival_time: 5
+    duration: 10
+    gpu_count: 1
+    gpu_memory_gb: 20
+    priority: critical
+    type: inference
+    gang: false

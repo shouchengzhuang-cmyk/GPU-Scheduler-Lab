@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from typing import Any
 
+from gpu_scheduler_lab.models.topology import TopologyMode
+
 
 class Priority(IntEnum):
     LOW = 0
@@ -29,6 +31,8 @@ class JobType(StrEnum):
 class JobStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
+    CHECKPOINTING = "checkpointing"
+    RESTARTING = "restarting"
     COMPLETED = "completed"
 
 
@@ -44,6 +48,12 @@ class Job:
     gang: bool = False
     sla_deadline: float | None = None
     group: str | None = None
+    gpu_model: str | None = None
+    allowed_gpu_models: tuple[str, ...] = ()
+    topology_mode: TopologyMode = TopologyMode.NONE
+    checkpoint_cost: float = 0.0
+    restart_cost: float = 0.0
+    source_metadata: dict[str, Any] = field(default_factory=dict)
     status: JobStatus = field(default=JobStatus.PENDING, init=False)
     allocated_gpu_ids: list[str] = field(default_factory=list, init=False)
     accumulated_runtime: float = field(default=0.0, init=False)
@@ -53,11 +63,16 @@ class Job:
     preemption_count: int = field(default=0, init=False)
     run_generation: int = field(default=0, init=False)
     running_priority: int | None = field(default=None, init=False)
+    checkpoint_overhead: float = field(default=0.0, init=False)
+    restart_overhead: float = field(default=0.0, init=False)
 
     def __post_init__(self) -> None:
         self.priority = Priority.parse(self.priority)
         if isinstance(self.job_type, str):
             self.job_type = JobType(self.job_type)
+        if isinstance(self.topology_mode, str):
+            self.topology_mode = TopologyMode(self.topology_mode)
+        self.allowed_gpu_models = tuple(self.allowed_gpu_models)
         if not self.id:
             raise ValueError("job id must not be empty")
         if self.arrival_time < 0:
@@ -70,6 +85,14 @@ class Job:
             raise ValueError("gpu_memory_gb must be positive")
         if self.sla_deadline is not None and self.sla_deadline < self.arrival_time:
             raise ValueError("sla_deadline must not precede arrival_time")
+        if self.gpu_model is not None and self.allowed_gpu_models:
+            raise ValueError("gpu_model and allowed_gpu_models are mutually exclusive")
+        if self.gpu_model == "":
+            raise ValueError("gpu_model must not be empty")
+        if any(not model for model in self.allowed_gpu_models):
+            raise ValueError("allowed_gpu_models must not contain empty values")
+        if self.checkpoint_cost < 0 or self.restart_cost < 0:
+            raise ValueError("preemption costs must be non-negative")
 
     @property
     def remaining_duration(self) -> float:
@@ -112,6 +135,12 @@ class Job:
                 float(data["sla_deadline"]) if data.get("sla_deadline") is not None else None
             ),
             group=str(data["group"]) if data.get("group") is not None else None,
+            gpu_model=str(data["gpu_model"]) if data.get("gpu_model") is not None else None,
+            allowed_gpu_models=tuple(str(value) for value in data.get("allowed_gpu_models", [])),
+            topology_mode=TopologyMode(str(data.get("topology_mode", "none"))),
+            checkpoint_cost=float(data.get("checkpoint_cost", 0.0)),
+            restart_cost=float(data.get("restart_cost", 0.0)),
+            source_metadata=dict(data.get("source_metadata", {})),
         )
 
     def clone(self) -> Job:
@@ -126,4 +155,10 @@ class Job:
             gang=self.gang,
             sla_deadline=self.sla_deadline,
             group=self.group,
+            gpu_model=self.gpu_model,
+            allowed_gpu_models=self.allowed_gpu_models,
+            topology_mode=self.topology_mode,
+            checkpoint_cost=self.checkpoint_cost,
+            restart_cost=self.restart_cost,
+            source_metadata=dict(self.source_metadata),
         )

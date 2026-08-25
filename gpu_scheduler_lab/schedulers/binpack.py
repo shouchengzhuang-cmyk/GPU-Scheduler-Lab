@@ -1,5 +1,6 @@
 from gpu_scheduler_lab.models.cluster import GPU, Cluster, Node
 from gpu_scheduler_lab.models.job import Job
+from gpu_scheduler_lab.models.topology import TopologyMode
 from gpu_scheduler_lab.schedulers.base import Scheduler
 
 
@@ -11,11 +12,18 @@ class BinPackScheduler(Scheduler):
     @staticmethod
     def _eligible(node: Node, job: Job) -> list[GPU]:
         return sorted(
-            (gpu for gpu in node.gpus if gpu.can_host(job.gpu_memory_gb)),
+            (gpu for gpu in node.gpus if gpu.can_host(job)),
             key=lambda gpu: (gpu.memory_capacity_gb - job.gpu_memory_gb, gpu.id),
         )
 
     def place(self, cluster: Cluster, job: Job) -> list[str] | None:
+        if job.topology_mode in {
+            TopologyMode.REQUIRE_SAME_NODE,
+            TopologyMode.REQUIRE_SAME_RACK,
+        }:
+            from gpu_scheduler_lab.schedulers.topology import TopologyAwareScheduler
+
+            return TopologyAwareScheduler().place(cluster, job)
         candidates = [
             (node, self._eligible(node, job)) for node in cluster.nodes if node.schedulable
         ]
