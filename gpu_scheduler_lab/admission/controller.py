@@ -4,8 +4,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from gpu_scheduler_lab.fairshare.accounting import AccountingPolicy
-from gpu_scheduler_lab.models.cluster import Cluster
+from gpu_scheduler_lab.models.cluster import GPU, Cluster
 from gpu_scheduler_lab.models.job import Job
+from gpu_scheduler_lab.models.topology import TopologyMode, topology_domain
 from gpu_scheduler_lab.queues.hierarchy import QueueHierarchy
 
 
@@ -48,6 +49,8 @@ class AdmissionController:
         ]
         if len(compatible) < minimum:
             return AdmissionDecision(False, "impossible_gpu_request")
+        if not self._topology_feasible(job, compatible, minimum):
+            return AdmissionDecision(False, "impossible_gpu_request")
         if self.mode is AdmissionMode.QUOTA_AWARE:
             demand = self.accounting.minimum_demand(job, compatible, minimum)
             for ancestor_id in self.hierarchy.ancestors(job.queue_id):
@@ -55,3 +58,19 @@ class AdmissionController:
                 if not demand.fits_within(limit):
                     return AdmissionDecision(False, "queue_hard_limit")
         return AdmissionDecision(True)
+
+    def _topology_feasible(self, job: Job, compatible: list[GPU], minimum: int) -> bool:
+        if job.topology_mode is TopologyMode.REQUIRE_SAME_NODE:
+            return any(
+                sum(gpu.node_id == node.id for gpu in compatible) >= minimum
+                for node in self.cluster.nodes
+            )
+        if job.topology_mode is TopologyMode.REQUIRE_SAME_RACK:
+            nodes = {node.id: node for node in self.cluster.nodes}
+            rack_counts: dict[str, int] = {}
+            for gpu in compatible:
+                node = nodes[gpu.node_id]
+                rack = topology_domain(node.id, node.topology, "rack")
+                rack_counts[rack] = rack_counts.get(rack, 0) + 1
+            return any(count >= minimum for count in rack_counts.values())
+        return True

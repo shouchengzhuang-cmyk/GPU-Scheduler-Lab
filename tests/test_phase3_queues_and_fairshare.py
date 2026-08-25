@@ -8,7 +8,7 @@ import pytest
 from gpu_scheduler_lab.allocation import FairShareScheduler
 from gpu_scheduler_lab.fairshare import AccountingPolicy
 from gpu_scheduler_lab.fairshare.drf import weighted_dominant_share
-from gpu_scheduler_lab.models import EventType, Job
+from gpu_scheduler_lab.models import EventType, Job, TopologyMode
 from gpu_scheduler_lab.models.cluster import Cluster
 from gpu_scheduler_lab.queues import QueueHierarchy, QueueSpec, ResourceVector
 from gpu_scheduler_lab.scenario import Scenario, load_scenario
@@ -138,6 +138,25 @@ def test_no_borrow_allows_descendant_to_use_parent_guarantee() -> None:
     )
     assert not nested.can_allocate("parent/child", ResourceVector(2, 40), {}, borrowing=False)
 
+    borrowing_disabled = QueueHierarchy(
+        [
+            QueueSpec(
+                "locked",
+                "root",
+                guaranteed=ResourceVector(1),
+                limit=ResourceVector(2, 80),
+                borrowing_enabled=False,
+            ),
+            QueueSpec("locked/child", "locked", limit=ResourceVector(2, 80)),
+        ]
+    )
+    assert not borrowing_disabled.can_allocate(
+        "locked/child",
+        ResourceVector(1, 20),
+        {"locked/child": ResourceVector(1, 20)},
+        borrowing=True,
+    )
+
 
 def test_weighted_drf_is_finite_and_weight_adjusted() -> None:
     capacity = ResourceVector(8, 320)
@@ -196,6 +215,47 @@ def test_quota_admission_sums_cheapest_feasible_gpu_weights() -> None:
     assert result.jobs[0].rejection_reason == "queue_hard_limit"
 
 
+@pytest.mark.parametrize(
+    "topology_mode",
+    [TopologyMode.REQUIRE_SAME_NODE, TopologyMode.REQUIRE_SAME_RACK],
+)
+def test_admission_rejects_topologically_impossible_minimum(
+    topology_mode: TopologyMode,
+) -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": f"n{index}",
+                    "topology": {"zone": "z", "rack": f"r{index}"},
+                    "gpus": [{"id": f"g{index}", "memory_gb": 40}],
+                }
+                for index in range(2)
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job(
+                "gang",
+                0,
+                1,
+                2,
+                20,
+                queue_id="tenant",
+                gang=True,
+                topology_mode=topology_mode,
+            )
+        ],
+        queues=(QueueSpec("tenant", "root", limit=ResourceVector(2, 80)),),
+    )
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-borrow", scenario)
+    ).run()
+    assert result.jobs[0].rejection_reason == "impossible_gpu_request"
+
+
 def test_borrowing_and_reclaim_restore_guarantee() -> None:
     borrowing = _run("scenarios/multi-tenant-borrow-reclaim.yaml", "fairshare-borrow")
     reclaim = _run("scenarios/multi-tenant-borrow-reclaim.yaml", "fairshare-reclaim")
@@ -213,6 +273,40 @@ def test_borrowing_and_reclaim_restore_guarantee() -> None:
         for record in reclaim.trace
     )
     assert reclaim.metrics["queue_metrics"]["research"]["borrowed_gpu_time"] > 0
+
+
+def test_reclaim_restores_parent_entitlement_for_descendant() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [
+                        {"id": "g0", "memory_gb": 40},
+                        {"id": "g1", "memory_gb": 40},
+                    ],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job("borrower", 0, 10, 2, 20, queue_id="research"),
+            Job("child", 1, 1, 1, 20, queue_id="team/child"),
+        ],
+        queues=(
+            QueueSpec("research", "root", limit=ResourceVector(2, 80)),
+            QueueSpec("team", "root", guaranteed=ResourceVector(1), limit=ResourceVector(1, 40)),
+            QueueSpec("team/child", "team", limit=ResourceVector(1, 40)),
+        ),
+    )
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-reclaim", scenario)
+    ).run()
+    borrower, child = result.jobs
+    assert child.first_start_time == 1
+    assert borrower.reclaim_victim_count == 1
 
 
 def test_reclaim_does_not_take_in_guarantee_work_for_peer_borrowing() -> None:

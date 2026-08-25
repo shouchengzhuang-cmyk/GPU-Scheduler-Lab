@@ -104,8 +104,10 @@ class QueueHierarchy:
             for ancestor_id in guaranteed_ancestors
         ):
             return True
-        queue = self.specs[queue_id]
-        return borrowing and queue.borrowing_enabled
+        return borrowing and all(
+            self.specs[ancestor_id].borrowing_enabled
+            for ancestor_id in self.ancestors(queue_id)
+        )
 
     @staticmethod
     def _fits_guarantee(spec: QueueSpec, usage: ResourceVector) -> bool:

@@ -24,9 +24,7 @@ class BinPackScheduler(Scheduler):
             from gpu_scheduler_lab.schedulers.topology import TopologyAwareScheduler
 
             return TopologyAwareScheduler().place(cluster, job)
-        candidates = [
-            (node, self._eligible(node, job)) for node in cluster.nodes if node.schedulable
-        ]
+        candidates = [(node, self._eligible(node, job)) for node in cluster.schedulable_nodes]
         if sum(len(gpus) for _, gpus in candidates) < job.requested_gpu_count:
             return None
 

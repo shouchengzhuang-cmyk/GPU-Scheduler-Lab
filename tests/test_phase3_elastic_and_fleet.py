@@ -87,6 +87,27 @@ def test_failed_or_revoked_nodes_never_receive_new_placement() -> None:
             assert not {"p0", "p1"}.intersection(record.gpu_ids)
 
 
+@pytest.mark.parametrize("scheduler_name", ["binpack", "spread"])
+def test_placement_schedulers_ignore_unavailable_nodes(scheduler_name: str) -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "unavailable",
+                    "available": False,
+                    "gpus": [{"id": "bad", "memory_gb": 40}],
+                },
+                {
+                    "id": "available",
+                    "gpus": [{"id": "good", "memory_gb": 40}],
+                },
+            ]
+        }
+    )
+    placement = create_scheduler(scheduler_name).place(cluster, Job("job", 0, 1, 1, 20))
+    assert placement == ["good"]
+
+
 def test_elastic_borrowed_capacity_scales_down_before_job_preemption() -> None:
     cluster = Cluster.from_dict(
         {
