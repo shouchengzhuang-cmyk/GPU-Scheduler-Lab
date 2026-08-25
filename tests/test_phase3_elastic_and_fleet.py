@@ -6,7 +6,7 @@ import pytest
 
 from gpu_scheduler_lab.elastic import ElasticSpec
 from gpu_scheduler_lab.fleet import FleetEvent, FleetEventType
-from gpu_scheduler_lab.models import EventType, JobStatus, Priority
+from gpu_scheduler_lab.models import EventType, JobStatus, Priority, TopologyMode
 from gpu_scheduler_lab.models.cluster import Cluster
 from gpu_scheduler_lab.models.job import Job
 from gpu_scheduler_lab.queues import QueueSpec, ResourceVector
@@ -138,6 +138,108 @@ def test_elastic_borrowed_capacity_scales_down_before_job_preemption() -> None:
         record.event is EventType.ELASTIC_SCALE_DOWN and "PREEMPT_RECLAIM" in record.detail
         for record in result.trace
     )
+
+
+def test_elastic_reclaim_refreshes_shared_ancestor_usage() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": f"g{index}", "memory_gb": 40} for index in range(4)],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job(
+                "elastic-borrower",
+                0,
+                10,
+                4,
+                20,
+                queue_id="team/research",
+                elastic=ElasticSpec(2, 4, 4),
+            ),
+            Job("product", 1, 2, 2, 20, queue_id="team/product"),
+        ],
+        queues=(
+            QueueSpec("team", "root", limit=ResourceVector(4, 160)),
+            QueueSpec(
+                "team/research",
+                "team",
+                guaranteed=ResourceVector(2),
+                limit=ResourceVector(4, 160),
+            ),
+            QueueSpec(
+                "team/product",
+                "team",
+                guaranteed=ResourceVector(2),
+                limit=ResourceVector(2, 80),
+            ),
+        ),
+    )
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-reclaim", scenario)
+    ).run()
+    borrower, product = result.jobs
+    assert product.first_start_time == 1
+    assert borrower.elastic_scale_down_count == 1
+    assert borrower.preemption_count == 0
+
+
+def test_elastic_scale_up_preserves_required_topology() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node-a",
+                    "topology": {"zone": "z", "rack": "r-a"},
+                    "gpus": [{"id": "a0", "model": "A", "memory_gb": 80}],
+                },
+                {
+                    "id": "node-b",
+                    "topology": {"zone": "z", "rack": "r-b"},
+                    "gpus": [
+                        {"id": "b0", "model": "B", "memory_gb": 40},
+                        {"id": "b1", "model": "B", "memory_gb": 40},
+                    ],
+                },
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job("blocker", 0, 1, 1, 40, gpu_model="B", queue_id="tenant"),
+            Job(
+                "elastic",
+                0,
+                4,
+                2,
+                40,
+                queue_id="tenant",
+                topology_mode=TopologyMode.REQUIRE_SAME_NODE,
+                elastic=ElasticSpec(1, 2, 2),
+            ),
+        ],
+        queues=(
+            QueueSpec(
+                "tenant",
+                "root",
+                guaranteed=ResourceVector(3),
+                limit=ResourceVector(3, 200),
+            ),
+        ),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("historical-drf", scenario)).run()
+    elastic = next(job for job in result.jobs if job.id == "elastic")
+    scale_up = next(record for record in result.trace if record.event is EventType.ELASTIC_SCALE_UP)
+    assert elastic.elastic_scale_up_count == 1
+    assert set(scale_up.node_ids) == {"node-b"}
+    assert result.metrics["topology_requirement_violation_count"] == 0
 
 
 def test_join_drain_fail_and_recover_have_explicit_semantics() -> None:

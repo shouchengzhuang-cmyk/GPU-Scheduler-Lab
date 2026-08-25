@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from gpu_scheduler_lab.allocation import FairShareScheduler
+from gpu_scheduler_lab.fairshare import AccountingPolicy
 from gpu_scheduler_lab.fairshare.drf import weighted_dominant_share
 from gpu_scheduler_lab.models import EventType, Job
 from gpu_scheduler_lab.models.cluster import Cluster
@@ -55,6 +57,31 @@ def test_weighted_drf_is_finite_and_weight_adjusted() -> None:
     usage = ResourceVector(4, 80)
     assert weighted_dominant_share(usage, capacity, 2) == pytest.approx(0.25)
     assert math.isfinite(weighted_dominant_share(usage, capacity, 2))
+
+
+def test_selected_gpu_model_cannot_exceed_queue_limit() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "light-node",
+                    "gpus": [{"id": "light", "model": "L", "memory_gb": 80}],
+                },
+                {
+                    "id": "heavy-node",
+                    "gpus": [{"id": "heavy", "model": "H", "memory_gb": 40}],
+                },
+            ]
+        }
+    )
+    job = Job("weighted", 0, 1, 1, 40, queue_id="tenant")
+    scheduler = FairShareScheduler(
+        QueueHierarchy([QueueSpec("tenant", "root", limit=ResourceVector(1, 80))]),
+        AccountingPolicy({"L": 1, "H": 2}),
+    )
+    scheduler.prepare(0, cluster, [job], [])
+    assert scheduler.placement.place(cluster, job) == ["heavy"]
+    assert scheduler.place(cluster, job) is None
 
 
 def test_borrowing_and_reclaim_restore_guarantee() -> None:

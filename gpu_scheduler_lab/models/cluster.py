@@ -171,17 +171,29 @@ class Cluster:
             raise ValueError("resize placement must contain unique GPUs")
         current = set(job.allocated_gpu_ids)
         target_set = set(target)
+        selected = [self.gpu_by_id(gpu_id) for gpu_id in target]
+        topologies = {node.id: node.topology for node in self.nodes}
+        from gpu_scheduler_lab.models.topology import topology_requirement_satisfied
+
+        if not topology_requirement_satisfied(
+            job.topology_mode,
+            (gpu.node_id for gpu in selected),
+            topologies,
+        ):
+            raise ValueError("resize placement violates the job topology requirement")
+        schedulable_ids = {gpu.id for gpu in self.schedulable_gpus}
+        for gpu_id in sorted(target_set - current):
+            gpu = self.gpu_by_id(gpu_id)
+            if gpu_id not in schedulable_ids or not gpu.can_host(job):
+                raise ValueError("resize contains an unavailable or undersized GPU")
         for gpu_id in sorted(current - target_set):
             gpu = self.gpu_by_id(gpu_id)
             if gpu.owner_job_id != job.id:
                 raise RuntimeError(f"GPU ownership mismatch for {gpu.id}")
             gpu.owner_job_id = None
             gpu.allocated_memory_gb = 0.0
-        schedulable_ids = {gpu.id for gpu in self.schedulable_gpus}
         for gpu_id in sorted(target_set - current):
             gpu = self.gpu_by_id(gpu_id)
-            if gpu_id not in schedulable_ids or not gpu.can_host(job):
-                raise ValueError("resize contains an unavailable or undersized GPU")
             gpu.owner_job_id = job.id
             gpu.allocated_memory_gb = job.gpu_memory_gb
         job.allocated_gpu_ids = target

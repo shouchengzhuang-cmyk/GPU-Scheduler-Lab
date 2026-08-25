@@ -46,3 +46,7 @@ class Scheduler(ABC):
 
     def can_resize(self, job: Job, replicas: int) -> bool:
         return False
+
+    def can_resize_placement(self, job: Job, gpu_ids: list[str]) -> bool:
+        """Validate a concrete resize placement after GPU selection."""
+        return True

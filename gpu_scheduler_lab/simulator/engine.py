@@ -470,6 +470,12 @@ class Simulator:
     def _preempt_for(self, incoming: Job, now: float, *, reason: str) -> list[str] | None:
         incoming_priority = incoming.effective_priority(now, self.scheduler.aging_interval)
         if reason == "PREEMPT_RECLAIM" and self._shrink_elastic_for_reclaim(incoming, now):
+            allocated = [
+                *self.running.values(),
+                *self.checkpointing.values(),
+                *self.restarting.values(),
+            ]
+            self.scheduler.prepare(now, self.cluster, self.pending, allocated)
             placement = self.scheduler.place(self._placement_cluster(incoming), incoming)
             if placement is not None:
                 return placement
@@ -815,29 +821,21 @@ class Simulator:
                 or not self.scheduler.can_scale_up(job)
             ):
                 continue
-            target_replicas = next(
-                (
-                    replicas
-                    for replicas in range(
-                        job.elastic.preferred_replicas,
-                        job.current_replicas,
-                        -1,
-                    )
-                    if self.scheduler.can_resize(job, replicas)
-                ),
+            target: list[str] | None = None
+            for replicas in range(
+                job.elastic.preferred_replicas,
                 job.current_replicas,
-            )
-            needed = target_replicas - job.current_replicas
-            if needed <= 0:
-                continue
-            free = sorted(
-                self.cluster.eligible_gpus(job),
-                key=lambda gpu: (gpu.node_id, gpu.id),
-            )
-            if len(free) < needed:
+                -1,
+            ):
+                if not self.scheduler.can_resize(job, replicas):
+                    continue
+                candidate = self._elastic_resize_target(job, replicas)
+                if candidate is not None and self.scheduler.can_resize_placement(job, candidate):
+                    target = candidate
+                    break
+            if target is None:
                 continue
             self._accrue_productive_work(job, now)
-            target = [*job.allocated_gpu_ids, *(gpu.id for gpu in free[:needed])]
             old = job.current_replicas
             self.cluster.resize(job, target)
             job.current_replicas = len(target)
@@ -847,18 +845,45 @@ class Simulator:
             job.run_generation += 1
             job.last_start_time = now
             self._last_resize_time[job.id] = now
+            node_ids = self._node_ids(tuple(target))
+            self._record_topology_placement(job, tuple(target), node_ids)
             self.trace.append(
                 TraceRecord(
                     now,
                     EventType.ELASTIC_SCALE_UP,
                     job.id,
                     tuple(target),
-                    self._node_ids(tuple(target)),
+                    node_ids,
                     detail=f"replicas={old}->{len(target)}",
                 )
             )
             self._schedule_completion(job, now)
             break
+
+    def _elastic_resize_target(self, job: Job, replicas: int) -> list[str] | None:
+        needed = replicas - job.current_replicas
+        if needed <= 0:
+            return None
+        free = sorted(
+            self.cluster.eligible_gpus(job),
+            key=lambda gpu: (
+                self.accounting.model_weights.get(gpu.model, 1.0),
+                gpu.node_id,
+                gpu.id,
+            ),
+        )
+        nodes = {node.id: node for node in self.cluster.nodes}
+        topologies = {node_id: node.topology for node_id, node in nodes.items()}
+        selected: list[str] = []
+        for gpu in free:
+            gpu_ids = [*job.allocated_gpu_ids, *selected, gpu.id]
+            node_ids = [self.cluster.gpu_by_id(gpu_id).node_id for gpu_id in gpu_ids]
+            if not topology_requirement_satisfied(job.topology_mode, node_ids, topologies):
+                continue
+            selected.append(gpu.id)
+            if len(selected) == needed:
+                return [*job.allocated_gpu_ids, *selected]
+        return None
 
     def _shrink_elastic_for_reclaim(self, incoming: Job, now: float) -> bool:
         changed = False

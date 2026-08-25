@@ -127,7 +127,19 @@ class FairShareScheduler(Scheduler):
             aggregate_usage=self._aggregate_usage,
         ):
             return None
-        return self.placement.place(cluster, job)
+        placement = self.placement.place(cluster, job)
+        if placement is None:
+            return None
+        actual_demand = self.accounting.allocation(job, cluster, placement)
+        if not self.hierarchy.can_allocate(
+            job.queue_id,
+            actual_demand,
+            self._direct_usage,
+            borrowing=self.borrowing,
+            aggregate_usage=self._aggregate_usage,
+        ):
+            return None
+        return placement
 
     def on_job_started(self, job: Job, now: float) -> None:
         if self._cluster is None:
@@ -166,6 +178,20 @@ class FairShareScheduler(Scheduler):
             return False
         additional = replicas - job.current_replicas
         demand = self.accounting.demand(job, self._cluster, additional)
+        return self.hierarchy.can_allocate(
+            job.queue_id,
+            demand,
+            self._direct_usage,
+            borrowing=self.borrowing,
+            aggregate_usage=self._aggregate_usage,
+        )
+
+    def can_resize_placement(self, job: Job, gpu_ids: list[str]) -> bool:
+        if self._cluster is None:
+            return False
+        current = set(job.allocated_gpu_ids)
+        added = [gpu_id for gpu_id in gpu_ids if gpu_id not in current]
+        demand = self.accounting.allocation(job, self._cluster, added)
         return self.hierarchy.can_allocate(
             job.queue_id,
             demand,
