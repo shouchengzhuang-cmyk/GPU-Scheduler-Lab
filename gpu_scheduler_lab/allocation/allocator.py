@@ -162,13 +162,10 @@ class FairShareScheduler(Scheduler):
             or not self._usage_exceeds_guarantee(victim.queue_id)
         ):
             return False
-        return (
-            all(
-                self.hierarchy.specs[queue_id].reclaimable
-                for queue_id in self.hierarchy.ancestors(victim.queue_id)
-            )
-            and self._has_guarantee_deficit(incoming.queue_id)
-        )
+        return all(
+            self.hierarchy.specs[queue_id].reclaimable
+            for queue_id in self.hierarchy.ancestors(victim.queue_id)
+        ) and self._has_guarantee_deficit(incoming.queue_id)
 
     def can_scale_up(self, job: Job) -> bool:
         if not self.supports_elastic or job.elastic is None:
@@ -181,8 +178,7 @@ class FairShareScheduler(Scheduler):
             dimensions = spec.guaranteed_dimensions or frozenset()
             usage = self._aggregate_usage.get(ancestor_id, ResourceVector())
             if (
-                "gpu_units" in dimensions
-                and usage.gpu_units + 1e-9 < spec.guaranteed.gpu_units
+                "gpu_units" in dimensions and usage.gpu_units + 1e-9 < spec.guaranteed.gpu_units
             ) or (
                 "gpu_memory_gb" in dimensions
                 and usage.gpu_memory_gb + 1e-9 < spec.guaranteed.gpu_memory_gb
@@ -196,8 +192,7 @@ class FairShareScheduler(Scheduler):
             dimensions = spec.guaranteed_dimensions or frozenset()
             usage = self._aggregate_usage.get(ancestor_id, ResourceVector())
             if (
-                "gpu_units" in dimensions
-                and usage.gpu_units > spec.guaranteed.gpu_units + 1e-9
+                "gpu_units" in dimensions and usage.gpu_units > spec.guaranteed.gpu_units + 1e-9
             ) or (
                 "gpu_memory_gb" in dimensions
                 and usage.gpu_memory_gb > spec.guaranteed.gpu_memory_gb + 1e-9

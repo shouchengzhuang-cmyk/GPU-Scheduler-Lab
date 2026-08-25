@@ -105,8 +105,7 @@ class QueueHierarchy:
         ):
             return True
         return borrowing and all(
-            self.specs[ancestor_id].borrowing_enabled
-            for ancestor_id in self.ancestors(queue_id)
+            self.specs[ancestor_id].borrowing_enabled for ancestor_id in self.ancestors(queue_id)
         )
 
     @staticmethod

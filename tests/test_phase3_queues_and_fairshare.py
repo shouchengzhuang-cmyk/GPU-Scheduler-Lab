@@ -250,9 +250,7 @@ def test_admission_rejects_topologically_impossible_minimum(
         ],
         queues=(QueueSpec("tenant", "root", limit=ResourceVector(2, 80)),),
     )
-    result = Simulator.from_scenario(
-        scenario, create_scheduler("fairshare-borrow", scenario)
-    ).run()
+    result = Simulator.from_scenario(scenario, create_scheduler("fairshare-borrow", scenario)).run()
     assert result.jobs[0].rejection_reason == "impossible_gpu_request"
 
 
