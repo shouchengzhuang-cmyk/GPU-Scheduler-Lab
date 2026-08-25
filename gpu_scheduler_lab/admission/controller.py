@@ -29,28 +29,37 @@ class AdmissionController:
         cluster: Cluster,
         accounting: AccountingPolicy,
         mode: str = "permissive",
-        potential_node_ids: set[str] | None = None,
     ) -> None:
         self.hierarchy = hierarchy
         self.cluster = cluster
         self.accounting = accounting
         self.mode = AdmissionMode(mode)
-        self.potential_node_ids = potential_node_ids if potential_node_ids is not None else set()
 
-    def decide(self, job: Job) -> AdmissionDecision:
+    def decide(
+        self,
+        job: Job,
+        node_snapshots: tuple[frozenset[str], ...] | None = None,
+    ) -> AdmissionDecision:
         if job.queue_id not in self.hierarchy.specs:
             return AdmissionDecision(False, "unknown_queue")
         minimum = job.minimum_gpu_count
-        compatible = [
-            gpu
-            for node in self.cluster.nodes
-            if (node.available and node.schedulable) or node.id in self.potential_node_ids
-            for gpu in node.gpus
-            if gpu.is_compatible(job)
+        if node_snapshots is None:
+            node_snapshots = (frozenset(node.id for node in self.cluster.schedulable_nodes),)
+        feasible_sets = [
+            gpu_set
+            for node_ids in node_snapshots
+            for gpu_set in self._feasible_gpu_sets(
+                job,
+                [
+                    gpu
+                    for node in self.cluster.nodes
+                    if node.id in node_ids
+                    for gpu in node.gpus
+                    if gpu.is_compatible(job)
+                ],
+                minimum,
+            )
         ]
-        if len(compatible) < minimum:
-            return AdmissionDecision(False, "impossible_gpu_request")
-        feasible_sets = self._feasible_gpu_sets(job, compatible, minimum)
         if not feasible_sets:
             return AdmissionDecision(False, "impossible_gpu_request")
         if self.mode is AdmissionMode.QUOTA_AWARE:

@@ -57,7 +57,7 @@ Job 至少取得 min 才能原子启动。默认 work rate 等于 replica 数；
 
 ## Dynamic fleet
 
-`NODE_JOIN` 增加此前 unavailable 的容量；`NODE_DRAIN` 禁止新 placement，但不终止已有 Job；`NODE_FAIL` 立即使 Node unavailable；`NODE_RECOVER` 恢复 Node；`CAPACITY_REVOKE` 和 `CAPACITY_RETURN` 对 revocable capacity 执行同类撤回与返回语义。Admission 使用 current 加尚未发生的 future capacity；事件消费后对应 future capacity 会从 potential set 删除。Metrics 使用 active capacity：draining Node 只保留仍被占用的 GPU，排空后立即离开 denominator。
+`NODE_JOIN` 增加此前 unavailable 的容量；`NODE_DRAIN` 禁止新 placement，但不终止已有 Job；`NODE_FAIL` 立即使 Node unavailable；`NODE_RECOVER` 恢复 Node；`CAPACITY_REVOKE` 和 `CAPACITY_RETURN` 对 revocable capacity 执行同类撤回与返回语义。Admission 从 current state 沿尚未发生的 fleet events 推演可实现容量快照，Job 的完整最小 placement 必须在某一个快照内成立；先失效的 Node 与后来加入的 Node 不会被跨时间相加。Metrics 使用 active capacity：draining Node 只保留仍被占用的 GPU，排空后立即离开 denominator。
 
 Forced loss 会保留已经结算的 productive work，Job 重新进入 pending/restart 路径。这个 optimistic recovery model 没有模拟 durable checkpoint interval。Revocable GPU 在撤回前仍是普通独占 GPU，没有第二套 ownership。
 

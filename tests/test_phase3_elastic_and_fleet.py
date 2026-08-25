@@ -438,6 +438,38 @@ def test_admission_forgets_consumed_capacity_return_events() -> None:
     assert result.jobs[0].rejection_reason == "impossible_gpu_request"
 
 
+def test_admission_does_not_union_capacity_from_disjoint_fleet_intervals() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "current",
+                    "gpus": [{"id": "g0", "memory_gb": 40}],
+                },
+                {
+                    "id": "future",
+                    "available": False,
+                    "schedulable": False,
+                    "gpus": [{"id": "g1", "memory_gb": 40}],
+                },
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [Job("gang", 0, 1, 2, 20, queue_id="tenant", gang=True)],
+        queues=(QueueSpec("tenant", "root", limit=ResourceVector(2, 80)),),
+        fleet_events=(
+            FleetEvent(1, FleetEventType.NODE_FAIL, "current"),
+            FleetEvent(2, FleetEventType.NODE_JOIN, "future"),
+        ),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("historical-drf", scenario)).run()
+    job = result.jobs[0]
+    assert job.status is JobStatus.REJECTED
+    assert job.rejection_reason == "impossible_gpu_request"
+
+
 def test_event_cleanup_reaches_fixed_point_after_aging_tick_removal() -> None:
     cluster = Cluster.from_dict(
         {

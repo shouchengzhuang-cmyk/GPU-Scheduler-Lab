@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from gpu_scheduler_lab.admission.controller import AdmissionController
 from gpu_scheduler_lab.fairshare.accounting import AccountingPolicy
-from gpu_scheduler_lab.fleet.events import FleetEventType
+from gpu_scheduler_lab.fleet.events import FleetEventType, schedulable_node_snapshots
 from gpu_scheduler_lab.metrics.fairness import jains_fairness_index
 from gpu_scheduler_lab.metrics.fragmentation import fragmentation_snapshot
 from gpu_scheduler_lab.metrics.summary import build_metrics
@@ -86,25 +86,12 @@ class Simulator:
         self.scheduler = scheduler
         self.scenario = scenario
         self.accounting = scenario.accounting if scenario is not None else AccountingPolicy()
-        self._remaining_capacity_returns: dict[str, int] = {}
-        if scenario is not None:
-            for event in scenario.fleet_events:
-                if event.event_type in {
-                    FleetEventType.NODE_JOIN,
-                    FleetEventType.NODE_RECOVER,
-                    FleetEventType.CAPACITY_RETURN,
-                }:
-                    self._remaining_capacity_returns[event.node_id] = (
-                        self._remaining_capacity_returns.get(event.node_id, 0) + 1
-                    )
-        potential_node_ids = set(self._remaining_capacity_returns)
         self.admission = (
             AdmissionController(
                 scheduler.hierarchy,
                 self.cluster,
                 self.accounting,
                 scenario.admission_mode,
-                potential_node_ids,
             )
             if scenario is not None and hasattr(scheduler, "hierarchy")
             else None
@@ -286,8 +273,9 @@ class Simulator:
 
     def _arrive(self, event: Event, now: float) -> None:
         job = self.by_id[event.job_id]
+        capacity_snapshots = self._capacity_snapshots(now)
         if self.admission is not None:
-            decision = self.admission.decide(job)
+            decision = self.admission.decide(job, capacity_snapshots)
             if not decision.admitted:
                 job.status = JobStatus.REJECTED
                 job.rejection_reason = decision.reason
@@ -302,7 +290,7 @@ class Simulator:
         else:
             job.admission_time = now
         self.pending.append(job)
-        self._add_runnable_demand(job)
+        self._add_runnable_demand(job, capacity_snapshots)
         self.trace.append(TraceRecord(now, EventType.JOB_ARRIVAL, job.id))
         self._schedule_aging_tick(job, now)
 
@@ -1033,18 +1021,6 @@ class Simulator:
             node.available = True
             node.draining = False
             node.schedulable = True
-        if event.event_type in {
-            EventType.NODE_JOIN,
-            EventType.NODE_RECOVER,
-            EventType.CAPACITY_RETURN,
-        }:
-            remaining = self._remaining_capacity_returns[node.id] - 1
-            if remaining:
-                self._remaining_capacity_returns[node.id] = remaining
-            else:
-                self._remaining_capacity_returns.pop(node.id)
-                if self.admission is not None:
-                    self.admission.potential_node_ids.discard(node.id)
         self.trace.append(
             TraceRecord(
                 now,
@@ -1257,28 +1233,39 @@ class Simulator:
             timeline[:] = timeline[::2]
         timeline.append(point)
 
-    def _add_runnable_demand(self, job: Job) -> None:
-        potential_node_ids = (
-            self.admission.potential_node_ids if self.admission is not None else set()
+    def _capacity_snapshots(self, now: float) -> tuple[frozenset[str], ...]:
+        fleet_events = self.scenario.fleet_events if self.scenario is not None else ()
+        return schedulable_node_snapshots(self.cluster, fleet_events, after=now)
+
+    def _add_runnable_demand(
+        self,
+        job: Job,
+        node_snapshots: tuple[frozenset[str], ...],
+    ) -> None:
+        candidates: list[tuple[int, ResourceVector]] = []
+        for node_ids in node_snapshots:
+            compatible = [
+                gpu
+                for node in self.cluster.nodes
+                if node.id in node_ids
+                for gpu in node.gpus
+                if gpu.is_compatible(job)
+            ]
+            replicas = min(job.preferred_gpu_count, len(compatible))
+            if replicas < job.minimum_gpu_count:
+                continue
+            try:
+                demand = self.accounting.minimum_demand(job, compatible, replicas)
+            except ValueError:
+                continue
+            candidates.append((replicas, demand))
+        if not candidates:
+            return
+        replicas = max(candidate[0] for candidate in candidates)
+        demand = min(
+            (candidate[1] for candidate in candidates if candidate[0] == replicas),
+            key=lambda item: (item.gpu_units, item.gpu_memory_gb),
         )
-        compatible = [
-            gpu
-            for node in self.cluster.nodes
-            if (node.available and node.schedulable) or node.id in potential_node_ids
-            for gpu in node.gpus
-            if gpu.is_compatible(job)
-        ]
-        replicas = min(job.preferred_gpu_count, len(compatible))
-        if replicas < job.minimum_gpu_count:
-            return
-        try:
-            demand = self.accounting.minimum_demand(
-                job,
-                compatible,
-                replicas,
-            )
-        except ValueError:
-            return
         self._runnable_demand_by_job[job.id] = demand
         self._direct_runnable_demand[job.queue_id] = (
             self._direct_runnable_demand.get(job.queue_id, ResourceVector()) + demand

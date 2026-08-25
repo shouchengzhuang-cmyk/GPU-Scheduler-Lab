@@ -483,6 +483,50 @@ def test_reclaim_restores_parent_entitlement_for_descendant() -> None:
     assert borrower.reclaim_victim_count == 1
 
 
+def test_reclaim_uses_parent_entitlement_when_leaf_guarantee_is_smaller() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [
+                        {"id": "g0", "memory_gb": 40},
+                        {"id": "g1", "memory_gb": 40},
+                    ],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job("outside", 0, 10, 2, 20, queue_id="outside"),
+            Job("prod-gang", 1, 1, 2, 20, queue_id="team/prod", gang=True),
+        ],
+        queues=(
+            QueueSpec(
+                "team",
+                "root",
+                guaranteed=ResourceVector(2),
+                limit=ResourceVector(2, 80),
+            ),
+            QueueSpec(
+                "team/prod",
+                "team",
+                guaranteed=ResourceVector(1),
+                limit=ResourceVector(2, 80),
+            ),
+            QueueSpec("outside", "root", limit=ResourceVector(2, 80)),
+        ),
+    )
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-reclaim", scenario)
+    ).run()
+    outside, prod = result.jobs
+    assert outside.reclaim_victim_count == 1
+    assert prod.first_start_time == 1
+
+
 def test_reclaim_does_not_take_in_guarantee_work_for_peer_borrowing() -> None:
     cluster = Cluster.from_dict(
         {

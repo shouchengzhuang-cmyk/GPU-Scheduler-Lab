@@ -159,7 +159,7 @@ Fleet event 支持 `NODE_JOIN`、`NODE_DRAIN`、`NODE_FAIL`、`NODE_RECOVER`、`
 
 ## Metrics
 
-Cluster metrics 包括平均/峰值 GPU utilization、GPU memory utilization、Node utilization、idle GPU time，以及下述 count/memory fragmentation。Job metrics 包括 wait、turnaround、completion、preemption 和 SLA；Scheduling metrics 还包括 topology placement/distance、reservation/backfill 保证和 checkpoint/restart overhead。容量口径明确分开：physical capacity 是全部 inventory；potential capacity 是当前可调度容量与场景中尚未发生的新增/返回容量，只用于 admission 和 synthetic overlay 上限；schedulable capacity 是当前可用于 placement、fair-share 和 fragmentation 的容量；active capacity 还保留 draining Node 上正在运行的 GPU，只用于按事件区间积分 utilization、idle、memory、Node、stable/revocable 和 fleet timeline。cordoned、unavailable 或已经排空的容量不会产生虚假 idle time。
+Cluster metrics 包括平均/峰值 GPU utilization、GPU memory utilization、Node utilization、idle GPU time，以及下述 count/memory fragmentation。Job metrics 包括 wait、turnaround、completion、preemption 和 SLA；Scheduling metrics 还包括 topology placement/distance、reservation/backfill 保证和 checkpoint/restart overhead。容量口径明确分开：physical capacity 是全部 inventory；potential capacity 是从当前状态沿 fleet timeline 推演得到的各个可实现快照，admission 只接受能在某个单独快照中完整放置的请求，synthetic overlay 也只取单个共存容量最大的快照，不会跨互斥时段相加；schedulable capacity 是当前可用于 placement、fair-share 和 fragmentation 的容量；active capacity 还保留 draining Node 上正在运行的 GPU，只用于按事件区间积分 utilization、idle、memory、Node、stable/revocable 和 fleet timeline。cordoned、unavailable 或已经排空的容量不会产生虚假 idle time。
 
 时间平均指标通过逻辑事件间隔积分，不依赖 `time.sleep()` 或真实 wall clock。Aging tick 只负责 starvation protection；当没有 running Job、只剩 aging bookkeeping event 时，它不会延长 workload horizon。
 

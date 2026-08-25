@@ -189,3 +189,60 @@ def test_tenant_overlay_uses_future_join_capacity_for_limits() -> None:
     assert queue.limit.gpu_memory_gb == 40
     assert result.jobs[0].first_start_time == 1
     assert result.jobs[0].completion_time == 2
+
+
+def test_tenant_overlay_does_not_union_disjoint_fleet_capacity() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "current",
+                    "gpus": [{"id": "g0", "memory_gb": 40}],
+                },
+                {
+                    "id": "future",
+                    "available": False,
+                    "schedulable": False,
+                    "gpus": [{"id": "g1", "memory_gb": 40}],
+                },
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [Job("job", 0, 1, 1, 20)],
+        fleet_events=(
+            FleetEvent(1, FleetEventType.NODE_FAIL, "current"),
+            FleetEvent(2, FleetEventType.NODE_JOIN, "future"),
+        ),
+    )
+    overlaid = _apply_tenant_overlay(scenario, {"tenant_count": 1})
+    queue = overlaid.queues[0]
+    assert queue.guaranteed.gpu_units == 1
+    assert queue.limit is not None
+    assert queue.limit.gpu_units == 1
+    assert queue.limit.gpu_memory_gb == 40
+
+
+def test_tenant_overlay_excludes_capacity_removed_at_time_zero() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "removed",
+                    "gpus": [{"id": "g0", "memory_gb": 40}],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [Job("job", 0, 1, 1, 20)],
+        fleet_events=(FleetEvent(0, FleetEventType.NODE_FAIL, "removed"),),
+    )
+    overlaid = _apply_tenant_overlay(scenario, {"tenant_count": 1})
+    queue = overlaid.queues[0]
+    assert queue.guaranteed.gpu_units == 0
+    assert queue.limit is not None
+    assert queue.limit.gpu_units == 0
+    assert queue.limit.gpu_memory_gb == 0

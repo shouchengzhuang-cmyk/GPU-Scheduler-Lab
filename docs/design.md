@@ -48,7 +48,7 @@ Engine 对所有 placement 都要求原子性；gang flag 表示 workload 明确
 
 Count fragmentation 使用 Node partiality $4p(1-p)$ 的容量加权平均；Memory fragmentation 使用独占 GPU 上 stranded memory 的比例；综合指标取二者平均。详细公式、0/1 语义和局限见 README。
 
-Cluster 把四种容量分开：physical capacity 是全部 Node/GPU inventory；potential capacity 是当前可调度 Node 与尚未发生的 join/recover/return，只用于 admission 和 synthetic tenant overlay；schedulable capacity 是当前 available、schedulable 且含 GPU 的 Node，用于 placement、fair-share 与 fragmentation；active capacity 是全部 schedulable GPU 加上 draining Node 中仍被占用的 GPU，用于 utilization、idle time、memory、Node、stable/revocable 和 fleet timeline 的区间积分。`schedulable: false`、unavailable、零 GPU Worker 和已经排空的 draining Node 都不会稀释对应实验指标。
+Cluster 把四种容量分开：physical capacity 是全部 Node/GPU inventory；potential capacity 是从当前状态沿 fleet event 时间线得到的可实现快照，admission 和 synthetic tenant overlay 都只使用单个共存快照，不会合并不同时间段的互斥 Node；schedulable capacity 是当前 available、schedulable 且含 GPU 的 Node，用于 placement、fair-share 与 fragmentation；active capacity 是全部 schedulable GPU 加上 draining Node 中仍被占用的 GPU，用于 utilization、idle time、memory、Node、stable/revocable 和 fleet timeline 的区间积分。`schedulable: false`、unavailable、零 GPU Worker 和已经排空的 draining Node 都不会稀释对应实验指标。
 
 ## 7. Determinism
 

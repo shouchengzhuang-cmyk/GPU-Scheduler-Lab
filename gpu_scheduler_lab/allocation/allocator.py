@@ -219,7 +219,7 @@ class FairShareScheduler(Scheduler):
             )
         except ValueError:
             return False
-        return self._demand_fits_entitlement(incoming.queue_id, demand)
+        return self._demand_fits_any_entitlement(incoming.queue_id, demand)
 
     def can_reclaim_placement(
         self,
@@ -333,22 +333,21 @@ class FairShareScheduler(Scheduler):
                 return False
         return found
 
-    def _demand_fits_entitlement(self, queue_id: str, demand: ResourceVector) -> bool:
-        found = False
+    def _demand_fits_any_entitlement(self, queue_id: str, demand: ResourceVector) -> bool:
         for ancestor_id in self.hierarchy.ancestors(queue_id):
             spec = self.hierarchy.specs[ancestor_id]
             dimensions = spec.guaranteed_dimensions or frozenset()
             if not dimensions:
                 continue
-            found = True
             if (
-                "gpu_units" in dimensions and demand.gpu_units > spec.guaranteed.gpu_units + 1e-9
-            ) or (
-                "gpu_memory_gb" in dimensions
-                and demand.gpu_memory_gb > spec.guaranteed.gpu_memory_gb + 1e-9
+                "gpu_units" not in dimensions
+                or demand.gpu_units <= spec.guaranteed.gpu_units + 1e-9
+            ) and (
+                "gpu_memory_gb" not in dimensions
+                or demand.gpu_memory_gb <= spec.guaranteed.gpu_memory_gb + 1e-9
             ):
-                return False
-        return found
+                return True
+        return False
 
     def _reclaim_boundary(
         self,
