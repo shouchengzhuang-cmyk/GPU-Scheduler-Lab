@@ -433,30 +433,29 @@ class Simulator:
     def _record_topology_placement(
         self, job: Job, gpu_ids: tuple[str, ...], node_ids: tuple[str, ...]
     ) -> None:
-        if not job.gang:
-            return
         unique = sorted(set(node_ids))
-        if len(unique) > 1:
-            self._cross_node_gang_placements += 1
         nodes = {node.id: node for node in self.cluster.nodes}
         topologies = {node_id: nodes[node_id].topology for node_id in unique}
         if not topology_requirement_satisfied(job.topology_mode, unique, topologies):
             self._topology_requirement_violations += 1
-        if len(unique) == 1:
-            self._same_node_gang_placements += 1
-        else:
-            racks = {
-                topology_domain(node_id, nodes[node_id].topology, "rack") for node_id in unique
-            }
-            zones = {
-                topology_domain(node_id, nodes[node_id].topology, "zone") for node_id in unique
-            }
-            if len(racks) == 1:
-                self._same_rack_gang_placements += 1
-            elif len(zones) == 1:
-                self._cross_rack_gang_placements += 1
+        if job.gang:
+            if len(unique) > 1:
+                self._cross_node_gang_placements += 1
+            if len(unique) == 1:
+                self._same_node_gang_placements += 1
             else:
-                self._cross_zone_gang_placements += 1
+                racks = {
+                    topology_domain(node_id, nodes[node_id].topology, "rack") for node_id in unique
+                }
+                zones = {
+                    topology_domain(node_id, nodes[node_id].topology, "zone") for node_id in unique
+                }
+                if len(racks) == 1:
+                    self._same_rack_gang_placements += 1
+                elif len(zones) == 1:
+                    self._cross_rack_gang_placements += 1
+                else:
+                    self._cross_zone_gang_placements += 1
         gpu_node_ids = [self.cluster.gpu_by_id(gpu_id).node_id for gpu_id in gpu_ids]
         distances = [
             topology_distance(

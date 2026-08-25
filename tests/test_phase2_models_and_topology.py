@@ -11,6 +11,7 @@ from gpu_scheduler_lab.schedulers import (
     SpreadScheduler,
     TopologyAwareScheduler,
 )
+from gpu_scheduler_lab.simulator import Simulator
 
 
 def _topology_cluster() -> Cluster:
@@ -122,6 +123,24 @@ def test_topology_scheduler_preference_has_stable_tie_break() -> None:
     second = TopologyAwareScheduler().place(cluster, job)
 
     assert first == second == ["a-0", "b-0"]
+
+
+def test_non_gang_multi_gpu_placement_contributes_topology_distance() -> None:
+    job = Job(
+        "multi-gpu",
+        0,
+        10,
+        2,
+        40,
+        gpu_model="A100",
+        gang=False,
+        topology_mode=TopologyMode.PREFER_SAME_RACK,
+    )
+
+    result = Simulator(_topology_cluster(), [job], TopologyAwareScheduler()).run()
+
+    assert result.metrics["average_topology_distance"] == 1.0
+    assert result.metrics["same_rack_gang_placement_count"] == 0
 
 
 def test_all_existing_schedulers_reuse_required_topology_feasibility() -> None:
