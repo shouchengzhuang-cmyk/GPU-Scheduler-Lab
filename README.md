@@ -221,10 +221,10 @@ $$
 
 | Scheduler | Simulator elapsed | Completion | Avg GPU util | Avg wait | P95 wait | Fragmentation | SLA violation |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| BinPack | 11.001 s | 1.000 | 0.5520 | 0.035 | 0.000 | 0.2777 | 0.0000 |
-| Spread | 9.816 s | 1.000 | 0.5520 | 0.000 | 0.000 | 0.5594 | 0.0000 |
+| BinPack | 9.807 s | 1.000 | 0.5520 | 0.035 | 0.000 | 0.2777 | 0.0000 |
+| Spread | 9.202 s | 1.000 | 0.5520 | 0.000 | 0.000 | 0.5594 | 0.0000 |
 
-Phase II 双策略 simulation 段 wall time 为 20.898 s；含 Python 启动、workload 生成和 JSON 写出的完整进程为 21.56 s，峰值 RSS 约 41,284 KiB。逻辑指标与 MVP 基线一致；新增 topology audit 让本次 wall time 高于旧实现，但没有改变 scheduler correctness。原始结果由脚本重新生成，不提交 `results/`。
+Phase II 双策略 simulation 段 wall time 为 19.070 s；含 Python 启动、workload 生成和 JSON 写出的完整进程为 22.85 s，峰值 RSS 约 41,432 KiB。逻辑指标与 MVP 基线一致；新增 topology audit 让本次 wall time 高于旧实现，但没有改变 scheduler correctness。原始结果由脚本重新生成，不提交 `results/`。
 
 ## Development and CI
 
