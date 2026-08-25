@@ -4,7 +4,7 @@ from pathlib import Path
 
 from conftest import make_cluster
 
-from gpu_scheduler_lab.models import EventType, Job, Priority
+from gpu_scheduler_lab.models import EventType, Job, JobStatus, Priority
 from gpu_scheduler_lab.scenario import load_scenario
 from gpu_scheduler_lab.schedulers import (
     FIFOScheduler,
@@ -74,6 +74,25 @@ def test_checkpoint_and_restart_costs_hold_resources_without_productive_progress
     assert result.metrics["total_checkpoint_overhead"] == 80
     assert result.metrics["total_restart_overhead"] == 80
     assert result.metrics["wasted_productive_gpu_time"] == 160
+
+
+def test_checkpoint_victims_stay_suspended_until_incoming_job_starts() -> None:
+    cluster = make_cluster([[24], [24]])
+    jobs = [
+        Job("victim-a", 0, 20, 1, 20, Priority.LOW, checkpoint_cost=1),
+        Job("victim-b", 0, 20, 1, 20, Priority.LOW, checkpoint_cost=2),
+        Job("incoming", 1, 1, 2, 20, Priority.CRITICAL, gang=True),
+        Job("other", 1.5, 1, 1, 20, Priority.NORMAL),
+    ]
+
+    result = Simulator(cluster, jobs, PreemptiveScheduler()).run()
+
+    assert _job(result, "incoming").first_start_time == 3
+    assert _job(result, "other").first_start_time == 4
+    assert _job(result, "victim-a").preemption_count == 1
+    assert _job(result, "victim-b").preemption_count == 1
+    assert result.metrics["preemption_count"] == 2
+    assert all(job.status is JobStatus.COMPLETED for job in result.jobs)
 
 
 def test_zero_cost_preemption_keeps_existing_resume_semantics() -> None:

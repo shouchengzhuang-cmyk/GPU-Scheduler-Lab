@@ -67,6 +67,9 @@ class Simulator:
         self.running: dict[str, Job] = {}
         self.checkpointing: dict[str, Job] = {}
         self.restarting: dict[str, Job] = {}
+        self._suspended_victims: dict[str, Job] = {}
+        self._preemption_target_by_victim: dict[str, str] = {}
+        self._preemption_reserved_gpus: dict[str, set[str]] = {}
         self.trace: list[TraceRecord] = []
         self._events: list[Event] = []
         self._sequence = 0
@@ -254,7 +257,7 @@ class Simulator:
 
     def _attempt_placement(self, job: Job, now: float, *, allow_preemption: bool) -> bool:
         self._scheduling_attempts += 1
-        placement = self.scheduler.place(self.cluster, job)
+        placement = self.scheduler.place(self._placement_cluster(job), job)
         if placement is None:
             self._failed_attempts += 1
             if allow_preemption and self.scheduler.supports_preemption:
@@ -276,6 +279,7 @@ class Simulator:
         job.run_generation += 1
         node_ids = self._node_ids(tuple(placement))
         self._record_topology_placement(job, tuple(placement), node_ids)
+        self._release_preemption_reservation(job.id, now)
         self.scheduler.on_job_started(job, now)
         if was_preempted and job.restart_cost > 0:
             job.status = JobStatus.RESTARTING
@@ -322,7 +326,7 @@ class Simulator:
             )
         )
         selected: list[Job] = []
-        projected = self.cluster.clone(preserve_allocations=True)
+        projected = self._placement_cluster(incoming).clone(preserve_allocations=True)
         projected_placement: list[str] | None = None
         for victim in victims:
             selected.append(victim)
@@ -335,12 +339,19 @@ class Simulator:
                 break
         if projected_placement is None:
             return None
+        defer_victims = any(victim.checkpoint_cost > 0 for victim in selected)
+        if defer_victims:
+            self._preemption_reserved_gpus[incoming.id] = {
+                gpu_id for victim in selected for gpu_id in victim.allocated_gpu_ids
+            }
+            for victim in selected:
+                self._preemption_target_by_victim[victim.id] = incoming.id
         for victim in selected:
             self._begin_preemption(victim, now, incoming.id)
-        if any(victim.checkpoint_cost > 0 for victim in selected):
+        if defer_victims:
             return None
         self._scheduling_attempts += 1
-        placement = self.scheduler.place(self.cluster, incoming)
+        placement = self.scheduler.place(self._placement_cluster(incoming), incoming)
         if placement is None:
             self._failed_attempts += 1
         return placement
@@ -365,8 +376,11 @@ class Simulator:
         if job.checkpoint_cost == 0:
             self.cluster.release(job)
             job.status = JobStatus.PENDING
-            self.pending.append(job)
-            self._schedule_aging_tick(job, now)
+            if job.id in self._preemption_target_by_victim:
+                self._suspended_victims[job.id] = job
+            else:
+                self.pending.append(job)
+                self._schedule_aging_tick(job, now)
             self.trace.append(
                 TraceRecord(
                     now,
@@ -404,8 +418,11 @@ class Simulator:
         self.cluster.release(job)
         self.checkpointing.pop(job.id)
         job.status = JobStatus.PENDING
-        self.pending.append(job)
-        self._schedule_aging_tick(job, now)
+        if job.id in self._preemption_target_by_victim:
+            self._suspended_victims[job.id] = job
+        else:
+            self.pending.append(job)
+            self._schedule_aging_tick(job, now)
         self.trace.append(
             TraceRecord(now, EventType.JOB_CHECKPOINT_COMPLETE, job.id, gpu_ids, node_ids)
         )
@@ -429,6 +446,38 @@ class Simulator:
             job.id,
             job.run_generation,
         )
+
+    def _placement_cluster(self, job: Job) -> Cluster:
+        reserved_elsewhere = {
+            gpu_id
+            for target, gpu_ids in self._preemption_reserved_gpus.items()
+            if target != job.id
+            for gpu_id in gpu_ids
+        }
+        if not reserved_elsewhere:
+            return self.cluster
+        projected = self.cluster.clone(preserve_allocations=True)
+        for gpu_id in reserved_elsewhere:
+            gpu = projected.gpu_by_id(gpu_id)
+            if gpu.free:
+                gpu.owner_job_id = "__preemption_reservation__"
+        return projected
+
+    def _release_preemption_reservation(self, incoming_id: str, now: float) -> None:
+        if incoming_id not in self._preemption_reserved_gpus:
+            return
+        self._preemption_reserved_gpus.pop(incoming_id)
+        victim_ids = [
+            victim_id
+            for victim_id, target in self._preemption_target_by_victim.items()
+            if target == incoming_id
+        ]
+        for victim_id in victim_ids:
+            self._preemption_target_by_victim.pop(victim_id)
+            victim = self._suspended_victims.pop(victim_id, None)
+            if victim is not None:
+                self.pending.append(victim)
+                self._schedule_aging_tick(victim, now)
 
     def _record_topology_placement(
         self, job: Job, gpu_ids: tuple[str, ...], node_ids: tuple[str, ...]

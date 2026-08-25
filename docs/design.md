@@ -34,6 +34,8 @@ not arrived -> pending -> running -> completed
 
 抢占开始时 productive runtime 冻结。checkpoint delay 内 GPU 仍归 victim，checkpoint-complete 才释放。resume 先分配 GPU，再经历不推进 productive runtime 的 restart delay。cost 为 0 时保持 MVP 的即时释放和恢复语义。`run_generation` 同时隔离 checkpoint 前的旧 completion event。
 
+一次抢占若需要多个 victim，已先完成 checkpoint 的 victim 会暂时挂起，释放出的 GPU 由 Engine 为 incoming Job 做不占 owner、不计 busy time 的内部 reservation。等 incoming Job 真正取得完整 gang placement 后，这批 victim 才重新进入 pending，避免不同 checkpoint 时长造成 victim 抢回资源并反复抢占。
+
 同一逻辑时间按 `JOB_COMPLETE`、`JOB_CHECKPOINT_COMPLETE`、`JOB_RESTART_COMPLETE`、`JOB_ARRIVAL`、`SCHEDULER_TICK` 排序，再执行 scheduling。
 
 Aging 每等待 30 个逻辑时间单位提升一级，防止 low/normal 在资源释放点永久被新 high jobs 越过。它不会绕过 victim 必须具有更低基础优先级的约束；dispatch 时的 aged priority 会固定到该 running attempt，避免同一时刻反向抢占。

@@ -60,6 +60,8 @@ running
 
 checkpoint/restart cost 都进入 turnaround。`wasted_productive_gpu_time` 表示 overhead 阶段占用但不推进 productive runtime 的 GPU-time；模型不包含真实 checkpoint bandwidth 或丢失工作重算。
 
+多 victim 抢占使用 Engine 内部临时 reservation：先完成 checkpoint 的 victim 保持 suspended，释放设备不计为占用，也不会被其他 Job 抢走；incoming gang 启动后再把 victim 放回 pending。它不写 GPU owner，也不同于 backfill scheduler 的 Job reservation。
+
 ## Experiment harness
 
 YAML config 定义 workload、schedulers、seeds 和 output directory。每个 run 保存 scheduler、seed、scenario hash、metrics 和完整 result；summary 对核心指标计算 mean、population standard deviation、median 和 P95。
