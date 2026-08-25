@@ -273,7 +273,8 @@ class Simulator:
         victims.sort(
             key=lambda job: (
                 job.effective_priority(now, self.scheduler.aging_interval),
-                -len(job.allocated_gpu_ids),
+                -self._suitable_gpu_count(job, incoming),
+                len(job.allocated_gpu_ids),
                 self._runtime_so_far(job, now),
                 job.id,
             )
@@ -283,10 +284,7 @@ class Simulator:
         recoverable = free_suitable
         for victim in victims:
             selected.append(victim)
-            recoverable += sum(
-                self.cluster.gpu_by_id(gpu_id).memory_capacity_gb >= incoming.gpu_memory_gb
-                for gpu_id in victim.allocated_gpu_ids
-            )
+            recoverable += self._suitable_gpu_count(victim, incoming)
             if recoverable >= incoming.gpu_count:
                 break
         if recoverable < incoming.gpu_count:
@@ -298,6 +296,12 @@ class Simulator:
         if placement is None:
             self._failed_attempts += 1
         return placement
+
+    def _suitable_gpu_count(self, victim: Job, incoming: Job) -> int:
+        return sum(
+            self.cluster.gpu_by_id(gpu_id).memory_capacity_gb >= incoming.gpu_memory_gb
+            for gpu_id in victim.allocated_gpu_ids
+        )
 
     def _preempt(self, job: Job, now: float, incoming_id: str) -> None:
         if job.last_start_time is None:

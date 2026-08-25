@@ -38,15 +38,29 @@ def build_metrics(
     preemptions = sum(job.preemption_count for job in jobs)
 
     demand_by_group: dict[str, float] = defaultdict(float)
-    served_by_group: dict[str, float] = defaultdict(float)
+    completed_by_group: dict[str, float] = defaultdict(float)
+    turnaround_by_group: dict[str, float] = defaultdict(float)
     for job in jobs:
         group = job.group or job.priority.name.lower()
         demand_by_group[group] += job.duration * job.gpu_count
-        if job.status is JobStatus.COMPLETED:
-            served_by_group[group] += job.duration * job.gpu_count
-    service_ratios = [
-        served_by_group[group] / demand for group, demand in sorted(demand_by_group.items())
-    ]
+        if job.status is JobStatus.COMPLETED and job.turnaround_time is not None:
+            completed_by_group[group] += job.duration * job.gpu_count
+            turnaround_by_group[group] += job.turnaround_time * job.gpu_count
+    fairness_groups: dict[str, dict[str, float]] = {}
+    for group, demand in sorted(demand_by_group.items()):
+        completed_gpu_time = completed_by_group[group]
+        turnaround = turnaround_by_group[group]
+        completion_ratio = completed_gpu_time / demand
+        latency_efficiency = min(1.0, completed_gpu_time / turnaround) if turnaround else 0.0
+        fairness_groups[group] = {
+            "demand_gpu_time": demand,
+            "completed_gpu_time": completed_gpu_time,
+            "completion_ratio": completion_ratio,
+            "turnaround_gpu_time": turnaround,
+            "latency_efficiency": latency_efficiency,
+            "service_quality": completion_ratio * latency_efficiency,
+        }
+    service_qualities = [group["service_quality"] for group in fairness_groups.values()]
 
     gpu_capacity_time = total_gpus * horizon
     memory_capacity_time = total_memory_gb * horizon
@@ -83,15 +97,8 @@ def build_metrics(
         "cross_node_gang_placement_count": cross_node_gang_placements,
         "scheduling_attempt_count": scheduling_attempts,
         "failed_placement_attempt_count": failed_attempts,
-        "jains_fairness_index": jains_fairness_index(service_ratios),
-        "fairness_groups": {
-            group: {
-                "demand_gpu_time": demand,
-                "served_gpu_time": served_by_group[group],
-                "service_ratio": served_by_group[group] / demand,
-            }
-            for group, demand in sorted(demand_by_group.items())
-        },
+        "jains_fairness_index": jains_fairness_index(service_qualities),
+        "fairness_groups": fairness_groups,
         "simulation_horizon": horizon,
         "busy_gpu_time": busy_gpu_time,
     }

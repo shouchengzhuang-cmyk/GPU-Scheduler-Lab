@@ -28,6 +28,14 @@ def test_profiles_generate_requested_job_count() -> None:
         assert len(scenario.jobs) == 17
 
 
+def test_explicit_default_shaped_priority_weights_override_burst_profile() -> None:
+    default_burst = GeneratorConfig(profile="burst")
+    explicit = GeneratorConfig(profile="burst", priority_weights=(20, 50, 25, 5))
+
+    assert default_burst.resolved_priority_weights == (15, 40, 35, 10)
+    assert explicit.resolved_priority_weights == (20, 50, 25, 5)
+
+
 def test_custom_workload_distributions_are_honored() -> None:
     scenario = generate_scenario(
         GeneratorConfig(

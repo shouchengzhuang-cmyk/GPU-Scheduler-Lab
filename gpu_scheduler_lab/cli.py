@@ -204,7 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument(
         "--priority-weights",
         type=_priority_weights,
-        default=(20.0, 50.0, 25.0, 5.0),
+        default=None,
         help="low,normal,high,critical weights",
     )
     generate.add_argument("--training-ratio", type=float, default=0.35)

@@ -19,7 +19,7 @@ Mini-AI-Cloud 当前概念到 simulator 的映射：
 | `gpu_count` | Job `gpu_count` | CPU-only Task 会被过滤并记录数量 |
 | `gpu_memory_mb` | Job `gpu_memory_gb` | 必须为正数 |
 | priority 0–100 | low/normal/high/critical | 0–24 / 25–74 / 75–89 / 90–100 |
-| `project_id` | Job `group` | 用于 Jain fairness |
+| `project_id` | Job `group` | 用于按完成率与延迟效率计算 Jain fairness |
 | workload type | inference/training | `training`/`batch_job` 映射 training，其余映射 inference |
 | label `gpu_scheduler_lab/gang=true` | `gang=true` | 多 GPU Task 也默认 gang |
 

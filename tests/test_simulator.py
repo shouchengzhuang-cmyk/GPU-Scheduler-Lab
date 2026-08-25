@@ -87,6 +87,21 @@ def test_preemption_does_not_evict_jobs_on_unsuitable_gpus() -> None:
     assert _job(result, "large").first_start_time == 1
 
 
+def test_preemption_minimizes_unsuitable_collateral_gpus() -> None:
+    jobs = [
+        Job("a-large-gang", 0, 100, 10, 20, priority=Priority.LOW, gang=True),
+        Job("b-small", 0, 100, 1, 70, priority=Priority.LOW),
+        Job("critical", 1, 10, 1, 70, priority=Priority.CRITICAL),
+    ]
+
+    result = Simulator(
+        make_cluster([[24.0] * 9 + [80.0], [80.0]]), jobs, PreemptiveScheduler()
+    ).run()
+
+    assert _job(result, "a-large-gang").preemption_count == 0
+    assert _job(result, "b-small").preemption_count == 1
+
+
 def test_cross_node_gang_placement_is_counted() -> None:
     job = Job("gang", 0, 10, 2, 20, gang=True)
 
@@ -107,6 +122,21 @@ def test_sla_violation_and_utilization_metrics() -> None:
     assert result.metrics["sla_violation_rate"] == 0.5
     assert result.metrics["average_gpu_utilization"] == 1.0
     assert result.metrics["idle_gpu_time"] == 0.0
+
+
+def test_fairness_uses_group_latency_outcomes() -> None:
+    jobs = [
+        Job("a-long", 0, 100, 1, 20, group="training"),
+        Job("z-short", 0, 1, 1, 20, group="inference"),
+    ]
+
+    result = Simulator(make_cluster([[24]]), jobs, FIFOScheduler()).run()
+    groups = result.metrics["fairness_groups"]
+
+    assert groups["training"]["service_quality"] == 1.0
+    assert groups["inference"]["service_quality"] == 1 / 101
+    assert all(0.0 <= group["latency_efficiency"] <= 1.0 for group in groups.values())
+    assert result.metrics["jains_fairness_index"] < 0.6
 
 
 def test_zero_job_scenario_is_well_defined() -> None:

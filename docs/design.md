@@ -27,7 +27,7 @@ not arrived -> pending -> running -> completed
 
 ## 4. Preemption semantics
 
-只有 placement 失败且存在优先级更低的 running jobs 时才抢占。victim 采用确定性 cost order 的最短可行前缀。被抢占作业保留已运行时间、释放所有 GPU、回 pending；不模拟 checkpoint I/O 或 restart overhead，这是已知乐观假设。
+只有 placement 失败且存在优先级更低的 running jobs 时才抢占。victim 采用确定性 cost order 的最短可行前缀：先比较能满足 incoming 显存要求的可恢复 GPU 数；同等可恢复资源下优先驱逐总占用 GPU 更少的 Job，避免异构集群中释放大量无用的小显存 GPU。被抢占作业保留已运行时间、释放所有 GPU、回 pending；不模拟 checkpoint I/O 或 restart overhead，这是已知乐观假设。
 
 Aging 每等待 30 个逻辑时间单位提升一级，防止 low/normal 在资源释放点永久被新 high jobs 越过。它不会绕过 victim 必须具有更低基础优先级的约束；dispatch 时的 aged priority 会固定到该 running attempt，避免同一时刻反向抢占。
 
@@ -46,7 +46,7 @@ Cluster 保留全部 physical Node/GPU inventory，同时暴露 schedulable Node
 - Event key：time、complete-before-arrival order、monotonic sequence；
 - FIFO tie：arrival、Job ID；
 - Placement tie：Node ID、GPU ID；
-- Victim tie：priority、freed GPU count、accumulated service、Job ID；
+- Victim tie：priority、suitable GPU count、total allocated GPU count、accumulated service、Job ID；
 - Workload randomness：局部 seeded RNG。
 
 `elapsed_seconds` 不参与 determinism assertion；trace、Job outcome 和 metrics 必须相等。

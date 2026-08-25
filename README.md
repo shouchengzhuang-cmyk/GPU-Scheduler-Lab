@@ -99,7 +99,7 @@ Spread 按 Node 当前占用 GPU 数升序排列，并轮询从不同 Node 取�
 
 Preemptive policy 使用 BinPack placement，pending queue 按有效优先级降序排列。`low/normal/high/critical` 分别为 0–3；等待每满 30 个逻辑时间单位提升一级，最高到 critical，作为 starvation protection。
 
-高优先级作业放置失败时，只考虑基础优先级严格更低、且当前 running priority 也更低的 running jobs；aging 影响 dispatch 顺序，但不会绕过“不得抢占同级或更高基础优先级”的约束。victim 顺序确定为：低优先级优先、释放 GPU 多者优先、累计运行时间短者优先、Job ID 稳定决胜。被抢占作业释放全部设备、保留累计运行时间并回到 pending；resume 只执行剩余 duration。旧 completion event 由 `run_generation` 隔离，不能释放新 execution 的资源。
+高优先级作业放置失败时，只考虑基础优先级严格更低、且当前 running priority 也更低的 running jobs；aging 影响 dispatch 顺序，但不会绕过“不得抢占同级或更高基础优先级”的约束。victim 顺序确定为：低优先级优先、能满足 incoming 显存要求的 GPU 多者优先、同等可恢复资源下总占用 GPU 少者优先、累计运行时间短者优先、Job ID 稳定决胜。被抢占作业释放全部设备、保留累计运行时间并回到 pending；resume 只执行剩余 duration。旧 completion event 由 `run_generation` 隔离，不能释放新 execution 的资源。
 
 这是确定性的 lowest-cost-first 贪心 victim set，不声称求解全局最优组合。
 
@@ -112,6 +112,8 @@ Preemptive policy 使用 BinPack placement，pending queue 按有效优先级降
 Cluster metrics 包括平均/峰值 GPU utilization、GPU memory utilization、Node utilization、idle GPU time，以及下述 count/memory fragmentation。Job metrics 包括 wait、turnaround、completion、preemption 和 SLA；Scheduling metrics 包括 placement attempts、failed attempts 和 cross-node gang placement。Cluster 同时保留 physical capacity 和 schedulable capacity；MVP 指标默认只用 `schedulable: true` 的 Node/GPU 作为分母，cordoned Node 不产生虚假 idle capacity。
 
 时间平均指标通过逻辑事件间隔积分，不依赖 `time.sleep()` 或真实 wall clock。Aging tick 只负责 starvation protection；当没有 running Job、只剩 aging bookkeeping event 时，它不会延长 workload horizon。
+
+Jain fairness 不使用 drain-to-completion 后必然相等的累计需求完成量。每个 group 的 `service_quality` 定义为 `completion_ratio * latency_efficiency`，其中 `latency_efficiency = completed_gpu_time / turnaround_gpu_time`；因此等待和重复抢占会降低该组结果，未完成作业也会通过 completion ratio 受到惩罚。Jain index 比较各组的 service quality，只表达组间均衡程度，不代表整体性能高低。
 
 ### GPU count fragmentation
 
@@ -186,10 +188,10 @@ $$
 
 | Scheduler | Simulator elapsed | Completion | Avg GPU util | Avg wait | P95 wait | Fragmentation | SLA violation |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| BinPack | 8.832 s | 1.000 | 0.5520 | 0.035 | 0.000 | 0.2777 | 0.0000 |
-| Spread | 8.047 s | 1.000 | 0.5520 | 0.000 | 0.000 | 0.5594 | 0.0000 |
+| BinPack | 8.974 s | 1.000 | 0.5520 | 0.035 | 0.000 | 0.2777 | 0.0000 |
+| Spread | 8.223 s | 1.000 | 0.5520 | 0.000 | 0.000 | 0.5594 | 0.0000 |
 
-双策略 simulation 段 wall time 为 16.905 s；含 Python 启动、workload 生成和 JSON 写出的完整进程为 20.65 s，峰值 RSS 约 37,536 KiB。原始结果由脚本重新生成，不提交 `results/`。
+双策略 simulation 段 wall time 为 17.225 s；含 Python 启动、workload 生成和 JSON 写出的完整进程为 17.69 s，峰值 RSS 约 37,764 KiB。原始结果由脚本重新生成，不提交 `results/`。
 
 ## Development and CI
 

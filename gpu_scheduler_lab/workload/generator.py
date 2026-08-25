@@ -20,7 +20,7 @@ class GeneratorConfig:
     duration_distribution: str = "lognormal"
     gpu_count_distribution: tuple[tuple[int, float], ...] | None = None
     gpu_memory_distribution: tuple[tuple[float, float], ...] | None = None
-    priority_weights: tuple[float, float, float, float] = (20, 50, 25, 5)
+    priority_weights: tuple[float, float, float, float] | None = None
     training_ratio: float = 0.35
     gang_probability: float = 0.35
     sla_probability: float = 0.5
@@ -52,10 +52,13 @@ class GeneratorConfig:
             memory <= 0 or weight <= 0 for memory, weight in self.gpu_memory_distribution
         ):
             raise ValueError("GPU memory distribution values and weights must be positive")
-        if len(self.priority_weights) != 4 or any(weight < 0 for weight in self.priority_weights):
-            raise ValueError("priority_weights must contain four non-negative weights")
-        if sum(self.priority_weights) <= 0:
-            raise ValueError("priority_weights must contain at least one positive weight")
+        if self.priority_weights is not None:
+            if len(self.priority_weights) != 4 or any(
+                weight < 0 for weight in self.priority_weights
+            ):
+                raise ValueError("priority_weights must contain four non-negative weights")
+            if sum(self.priority_weights) <= 0:
+                raise ValueError("priority_weights must contain at least one positive weight")
         for name, value in (
             ("training_ratio", self.training_ratio),
             ("gang_probability", self.gang_probability),
@@ -65,6 +68,14 @@ class GeneratorConfig:
                 raise ValueError(f"{name} must be between 0 and 1")
         if self.profile not in {"mixed", "fragmentation", "burst"}:
             raise ValueError("profile must be mixed, fragmentation, or burst")
+
+    @property
+    def resolved_priority_weights(self) -> tuple[float, float, float, float]:
+        if self.priority_weights is not None:
+            return self.priority_weights
+        if self.profile == "burst":
+            return (15, 40, 35, 10)
+        return (20, 50, 25, 5)
 
 
 def _cluster(config: GeneratorConfig) -> Cluster:
@@ -140,9 +151,7 @@ def generate_scenario(config: GeneratorConfig) -> Scenario:
         duration = max(1.0, sampled_duration * (2.0 if training else 0.45))
         priority = rng.choices(
             (Priority.LOW, Priority.NORMAL, Priority.HIGH, Priority.CRITICAL),
-            config.priority_weights
-            if config.priority_weights != (20, 50, 25, 5) or config.profile != "burst"
-            else (15, 40, 35, 10),
+            config.resolved_priority_weights,
         )[0]
         sla_deadline = None
         if rng.random() < config.sla_probability:
