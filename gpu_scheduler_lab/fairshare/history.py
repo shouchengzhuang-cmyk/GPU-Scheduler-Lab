@@ -18,13 +18,17 @@ class DecayedUsageHistory:
         if not math.isfinite(now) or now < self._last_time:
             raise ValueError("historical usage time must be finite and monotonic")
         delta = now - self._last_time
-        decay = math.exp(-math.log(2.0) * delta / self.half_life)
+        decay_rate = math.log(2.0) / self.half_life
+        decay = math.exp(-decay_rate * delta)
+        interval_weight = -math.expm1(-decay_rate * delta) / decay_rate
         keys = set(self.service) | set(rates)
         for queue_id in keys:
             rate = rates.get(queue_id, 0.0)
             if not math.isfinite(rate) or rate < 0:
                 raise ValueError("historical service rate must be finite and non-negative")
-            self.service[queue_id] = self.service.get(queue_id, 0.0) * decay + rate * delta
+            self.service[queue_id] = (
+                self.service.get(queue_id, 0.0) * decay + rate * interval_weight
+            )
         self._last_time = now
 
     def debt(self, queue_id: str, weights: dict[str, float]) -> float:

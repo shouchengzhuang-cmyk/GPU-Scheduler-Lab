@@ -127,7 +127,7 @@ Spread 按 Node 当前占用 GPU 数升序排列，并轮询从不同 Node 取�
 
 ### Priority + Preemption
 
-Preemptive policy 使用 BinPack placement，pending queue 按有效优先级降序排列。`low/normal/high/critical` 分别为 0–3；等待每满 30 个逻辑时间单位提升一级，最高到 critical，作为 starvation protection。
+Preemptive policy 使用 BinPack placement，pending queue 按有效优先级降序排列。`low/normal/high/critical` 分别为 0 到 3；等待每满 30 个逻辑时间单位提升一级，最高到 critical，作为 starvation protection。
 
 高优先级作业放置失败时，只考虑基础优先级严格更低、且当前 running priority 也更低的 running jobs；aging 影响 dispatch 顺序，但不会绕过“不得抢占同级或更高基础优先级”的约束。被抢占作业先进入 checkpoint。checkpoint 阶段继续占用 GPU，但 productive runtime 不推进；完成后释放资源并回到 pending。恢复时先分配 GPU，restart delay 期间仍不推进 productive runtime，之后只执行剩余 duration。默认 cost 为 0，因此旧 MVP 行为保持不变。旧 completion event 由 `run_generation` 隔离，不能释放新 execution 的资源。
 
@@ -159,11 +159,13 @@ Fleet event 支持 `NODE_JOIN`、`NODE_DRAIN`、`NODE_FAIL`、`NODE_RECOVER`、`
 
 ## Metrics
 
-Cluster metrics 包括平均/峰值 GPU utilization、GPU memory utilization、Node utilization、idle GPU time，以及下述 count/memory fragmentation。Job metrics 包括 wait、turnaround、completion、preemption 和 SLA；Scheduling metrics 还包括 topology placement/distance、reservation/backfill 保证和 checkpoint/restart overhead。Cluster 同时保留 physical capacity 和 schedulable capacity；默认只用 `schedulable: true` 的 Node/GPU 作为分母，cordoned Node 不产生虚假 idle capacity。
+Cluster metrics 包括平均/峰值 GPU utilization、GPU memory utilization、Node utilization、idle GPU time，以及下述 count/memory fragmentation。Job metrics 包括 wait、turnaround、completion、preemption 和 SLA；Scheduling metrics 还包括 topology placement/distance、reservation/backfill 保证和 checkpoint/restart overhead。容量口径明确分开：physical capacity 是全部 inventory；potential capacity 是当前可调度容量与场景中尚未发生的新增/返回容量，只用于 admission 和 synthetic overlay 上限；schedulable capacity 是当前可用于 placement、fair-share 和 fragmentation 的容量；active capacity 还保留 draining Node 上正在运行的 GPU，只用于按事件区间积分 utilization、idle、memory、Node、stable/revocable 和 fleet timeline。cordoned、unavailable 或已经排空的容量不会产生虚假 idle time。
 
 时间平均指标通过逻辑事件间隔积分，不依赖 `time.sleep()` 或真实 wall clock。Aging tick 只负责 starvation protection；当没有 running Job、只剩 aging bookkeeping event 时，它不会延长 workload horizon。
 
 Jain fairness 不使用 drain-to-completion 后必然相等的累计需求完成量。每个 group 的 `service_quality` 定义为 `completion_ratio * latency_efficiency`，其中 `latency_efficiency = completed_gpu_time / turnaround_gpu_time`；因此等待和重复抢占会降低该组结果，未完成作业也会通过 completion ratio 受到惩罚。Jain index 比较各组的 service quality，只表达组间均衡程度，不代表整体性能高低。
+
+`guaranteed_share_satisfaction` 只在 queue 有 runnable demand 时积分。每个区间的 entitlement 是 `min(guarantee, aggregate runnable demand)`，满足量是 `min(actual usage, entitlement)`；完全没有 entitlement demand 时返回 1，避免空闲 queue 被误报为未满足。
 
 ### GPU count fragmentation
 

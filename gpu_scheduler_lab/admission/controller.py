@@ -35,7 +35,7 @@ class AdmissionController:
         self.cluster = cluster
         self.accounting = accounting
         self.mode = AdmissionMode(mode)
-        self.potential_node_ids = potential_node_ids or set()
+        self.potential_node_ids = potential_node_ids if potential_node_ids is not None else set()
 
     def decide(self, job: Job) -> AdmissionDecision:
         if job.queue_id not in self.hierarchy.specs:

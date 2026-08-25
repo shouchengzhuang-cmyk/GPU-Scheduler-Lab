@@ -6,9 +6,10 @@ from pathlib import Path
 import pytest
 
 from gpu_scheduler_lab.allocation import FairShareScheduler
-from gpu_scheduler_lab.fairshare import AccountingPolicy
+from gpu_scheduler_lab.elastic import ElasticSpec
+from gpu_scheduler_lab.fairshare import AccountingPolicy, DecayedUsageHistory
 from gpu_scheduler_lab.fairshare.drf import weighted_dominant_share
-from gpu_scheduler_lab.models import EventType, Job, TopologyMode
+from gpu_scheduler_lab.models import EventType, Job, Priority, TopologyMode
 from gpu_scheduler_lab.models.cluster import Cluster
 from gpu_scheduler_lab.queues import QueueHierarchy, QueueSpec, ResourceVector
 from gpu_scheduler_lab.scenario import Scenario, load_scenario
@@ -36,6 +37,18 @@ def test_queue_hierarchy_rejects_invalid_graphs_and_quotas() -> None:
         QueueHierarchy(
             [
                 QueueSpec("parent", "root", limit=ResourceVector(1, 100)),
+                QueueSpec("child", "parent", guaranteed=ResourceVector(2)),
+            ]
+        )
+    with pytest.raises(ValueError, match="child guarantees"):
+        QueueHierarchy(
+            [
+                QueueSpec(
+                    "parent",
+                    "root",
+                    guaranteed=ResourceVector(1),
+                    limit=ResourceVector(2, 100),
+                ),
                 QueueSpec("child", "parent", guaranteed=ResourceVector(2)),
             ]
         )
@@ -131,7 +144,7 @@ def test_no_borrow_allows_descendant_to_use_parent_guarantee() -> None:
             QueueSpec(
                 "parent/child",
                 "parent",
-                guaranteed=ResourceVector(2),
+                guaranteed=ResourceVector(1),
                 limit=ResourceVector(2, 80),
             ),
         ]
@@ -185,6 +198,96 @@ def test_pending_order_prioritizes_descendant_parent_entitlement() -> None:
     borrower, entitled = result.jobs
     assert entitled.first_start_time == 0
     assert borrower.first_start_time == 1
+
+
+def test_drf_reranks_simultaneous_jobs_after_each_allocation() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": f"g{index}", "memory_gb": 40} for index in range(4)],
+                }
+            ]
+        }
+    )
+    jobs = [
+        Job(f"{queue}-{index}", 0, 10, 1, 20, queue_id=queue)
+        for queue in ("a", "b")
+        for index in range(4)
+    ]
+    scenario = Scenario(
+        cluster,
+        jobs,
+        queues=(
+            QueueSpec("a", "root", limit=ResourceVector(4, 160)),
+            QueueSpec("b", "root", limit=ResourceVector(4, 160)),
+        ),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("drf", scenario)).run()
+    initial = [job for job in result.jobs if job.first_start_time == 0]
+    assert sum(job.queue_id == "a" for job in initial) == 2
+    assert sum(job.queue_id == "b" for job in initial) == 2
+
+
+def test_guarantee_first_orders_only_jobs_that_fit_remaining_entitlement() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": f"g{index}", "memory_gb": 40} for index in range(2)],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job("a-oversized", 0, 10, 2, 20, queue_id="a", gang=True),
+            Job("z-entitled", 0, 1, 1, 20, queue_id="b"),
+        ],
+        queues=(
+            QueueSpec("a", "root", guaranteed=ResourceVector(1), limit=ResourceVector(2, 80)),
+            QueueSpec("b", "root", guaranteed=ResourceVector(1), limit=ResourceVector(1, 40)),
+        ),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("fairshare-borrow", scenario)).run()
+    oversized, entitled = result.jobs
+    assert entitled.first_start_time == 0
+    assert oversized.first_start_time == 1
+
+
+def test_hierarchical_drf_applies_parent_weight_to_descendants() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": f"g{index}", "memory_gb": 40} for index in range(3)],
+                }
+            ]
+        }
+    )
+    jobs = [
+        Job(f"{branch}-{index}", 0, 10, 1, 20, queue_id=f"{branch}/leaf")
+        for branch in ("a", "b")
+        for index in range(3)
+    ]
+    scenario = Scenario(
+        cluster,
+        jobs,
+        queues=(
+            QueueSpec("a", "root", weight=2, limit=ResourceVector(3, 120)),
+            QueueSpec("a/leaf", "a", limit=ResourceVector(3, 120)),
+            QueueSpec("b", "root", weight=1, limit=ResourceVector(3, 120)),
+            QueueSpec("b/leaf", "b", limit=ResourceVector(3, 120)),
+        ),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("drf", scenario)).run()
+    initial = [job for job in result.jobs if job.first_start_time == 0]
+    assert sum(job.queue_id == "a/leaf" for job in initial) == 2
+    assert sum(job.queue_id == "b/leaf" for job in initial) == 1
 
 
 def test_weighted_drf_is_finite_and_weight_adjusted() -> None:
@@ -413,6 +516,179 @@ def test_reclaim_does_not_take_in_guarantee_work_for_peer_borrowing() -> None:
     assert b_job.first_start_time == 10
 
 
+def test_reclaim_target_must_fit_remaining_entitlement() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [
+                        {"id": "g0", "memory_gb": 40},
+                        {"id": "g1", "memory_gb": 40},
+                    ],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job("borrower", 0, 10, 2, 20, queue_id="borrower"),
+            Job("oversized", 1, 1, 2, 20, queue_id="entitled", gang=True),
+        ],
+        queues=(
+            QueueSpec("borrower", "root", limit=ResourceVector(2, 80)),
+            QueueSpec(
+                "entitled",
+                "root",
+                guaranteed=ResourceVector(1),
+                limit=ResourceVector(2, 80),
+            ),
+        ),
+    )
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-reclaim", scenario)
+    ).run()
+    borrower, oversized = result.jobs
+    assert borrower.preemption_count == 0
+    assert oversized.first_start_time == 10
+
+
+def test_reclaim_uses_contended_sibling_branch_entitlement() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": "g0", "memory_gb": 40}],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job("borrower", 0, 10, 1, 20, queue_id="team/borrow"),
+            Job("entitled", 1, 1, 1, 20, queue_id="team/entitled"),
+        ],
+        queues=(
+            QueueSpec("team", "root", guaranteed=ResourceVector(1), limit=ResourceVector(1, 40)),
+            QueueSpec("team/borrow", "team", limit=ResourceVector(1, 40)),
+            QueueSpec(
+                "team/entitled",
+                "team",
+                guaranteed=ResourceVector(1),
+                limit=ResourceVector(1, 40),
+            ),
+        ),
+    )
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-reclaim", scenario)
+    ).run()
+    borrower, entitled = result.jobs
+    assert borrower.reclaim_victim_count == 1
+    assert entitled.first_start_time == 1
+
+
+def test_reclaim_uses_aggregate_branch_excess_not_leaf_borrow_marker() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [
+                        {"id": "g0", "memory_gb": 40},
+                        {"id": "g1", "memory_gb": 40},
+                    ],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job("team-job", 0, 10, 2, 20, queue_id="team/leaf"),
+            Job("product", 1, 1, 1, 20, queue_id="product"),
+        ],
+        queues=(
+            QueueSpec("team", "root", limit=ResourceVector(2, 80)),
+            QueueSpec(
+                "team/leaf",
+                "team",
+                guaranteed=ResourceVector(2),
+                limit=ResourceVector(2, 80),
+            ),
+            QueueSpec(
+                "product",
+                "root",
+                guaranteed=ResourceVector(1),
+                limit=ResourceVector(1, 40),
+            ),
+        ),
+    )
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-reclaim", scenario)
+    ).run()
+    team_job, product = result.jobs
+    assert team_job.borrowed_gpu_units == 0
+    assert team_job.reclaim_victim_count == 1
+    assert product.first_start_time == 1
+
+
+def test_reclaim_does_not_exceed_borrowed_branch_budget() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [
+                        {"id": f"h{index}", "model": "H100", "memory_gb": 80} for index in range(3)
+                    ]
+                    + [{"id": "a0", "model": "A10", "memory_gb": 24}],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            *[
+                Job(
+                    f"a-{index}",
+                    0,
+                    10,
+                    1,
+                    20,
+                    gpu_model="H100",
+                    queue_id="a",
+                )
+                for index in range(3)
+            ],
+            Job(
+                "target",
+                1,
+                1,
+                2,
+                20,
+                gpu_model="H100",
+                queue_id="b",
+                gang=True,
+            ),
+        ],
+        queues=(
+            QueueSpec("a", "root", guaranteed=ResourceVector(2), limit=ResourceVector(3, 240)),
+            QueueSpec("b", "root", guaranteed=ResourceVector(2), limit=ResourceVector(2, 160)),
+        ),
+    )
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-reclaim", scenario)
+    ).run()
+    a_jobs = [job for job in result.jobs if job.queue_id == "a"]
+    target = next(job for job in result.jobs if job.id == "target")
+    assert all(job.reclaim_victim_count == 0 for job in a_jobs)
+    assert target.first_start_time == 10
+
+
 def test_historical_fairshare_penalizes_prior_service() -> None:
     instantaneous = _run("scenarios/historical-fairshare.yaml", "drf")
     historical = _run("scenarios/historical-fairshare.yaml", "historical-drf")
@@ -421,6 +697,70 @@ def test_historical_fairshare_penalizes_prior_service() -> None:
     assert instant_b.first_start_time == 15
     assert historical_b.first_start_time == 10
     assert historical.metrics["queue_metrics"]["tenant-a"]["fairshare_debt"] > 0
+
+
+def test_historical_service_records_complete_interval_without_middle_event() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": "g0", "memory_gb": 40}],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [Job("job", 0, 10, 1, 20, queue_id="a")],
+        queues=(QueueSpec("a", "root", limit=ResourceVector(1, 40)),),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("historical-drf", scenario)).run()
+    expected = 300 * (1 - 0.5 ** (10 / 300)) / math.log(2)
+    assert result.metrics["queue_metrics"]["a"]["historical_service"] == pytest.approx(expected)
+
+
+def test_historical_service_is_invariant_to_interval_splitting() -> None:
+    single = DecayedUsageHistory(half_life=10)
+    single.integrate(10, {"a": 1})
+
+    split = DecayedUsageHistory(half_life=10)
+    for now in range(1, 11):
+        split.integrate(now, {"a": 1})
+
+    assert split.service["a"] == pytest.approx(single.service["a"])
+
+
+def test_historical_parent_debt_orders_descendant_jobs() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": "g0", "memory_gb": 40}],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job("a-first", 0, 10, 1, 20, queue_id="research/leaf"),
+            Job("a-second", 0, 1, 1, 20, queue_id="research/leaf"),
+            Job("b-late", 5, 1, 1, 20, queue_id="product/leaf"),
+        ],
+        queues=(
+            QueueSpec("research", "root", limit=ResourceVector(1, 40)),
+            QueueSpec("research/leaf", "research", limit=ResourceVector(1, 40)),
+            QueueSpec("product", "root", limit=ResourceVector(1, 40)),
+            QueueSpec("product/leaf", "product", limit=ResourceVector(1, 40)),
+        ),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("historical-drf", scenario)).run()
+    a_second = next(job for job in result.jobs if job.id == "a-second")
+    b_late = next(job for job in result.jobs if job.id == "b-late")
+    assert b_late.first_start_time == 10
+    assert a_second.first_start_time == 11
 
 
 def test_quota_aware_admission_rejects_impossible_limit_not_busy_capacity() -> None:
@@ -479,6 +819,60 @@ def test_multi_victim_reclaim_reserves_complete_gang_placement() -> None:
     assert [job.reclaim_victim_count for job in victims] == [1, 1]
 
 
+def test_deferred_reclaim_revalidates_entitlement_before_reserved_start() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "h-node",
+                    "gpus": [{"id": "h", "model": "H100", "memory_gb": 80}],
+                },
+                {
+                    "id": "a-node",
+                    "gpus": [{"id": "a", "model": "A10", "memory_gb": 24}],
+                },
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job(
+                "borrower",
+                0,
+                20,
+                1,
+                20,
+                gpu_model="H100",
+                queue_id="borrower",
+                checkpoint_cost=5,
+            ),
+            Job("filler", 0, 2, 1, 20, gpu_model="A10", queue_id="filler"),
+            Job("target", 1, 1, 1, 20, gpu_model="H100", queue_id="entitled"),
+            Job("other", 2, 10, 1, 20, gpu_model="A10", queue_id="entitled"),
+        ],
+        queues=(
+            QueueSpec("borrower", "root", limit=ResourceVector(1, 80)),
+            QueueSpec("filler", "root", limit=ResourceVector(1, 24)),
+            QueueSpec(
+                "entitled",
+                "root",
+                guaranteed=ResourceVector(1),
+                limit=ResourceVector(2, 104),
+            ),
+        ),
+    )
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-reclaim", scenario)
+    ).run()
+    borrower = next(job for job in result.jobs if job.id == "borrower")
+    target = next(job for job in result.jobs if job.id == "target")
+    other = next(job for job in result.jobs if job.id == "other")
+    assert other.first_start_time == 2
+    assert target.first_start_time is not None and target.first_start_time >= 12
+    assert borrower.reclaim_victim_count >= 1
+
+
 def test_zero_job_multi_tenant_scenario_serializes_strict_json() -> None:
     scenario = Scenario(
         Cluster.from_dict({"nodes": []}),
@@ -533,3 +927,211 @@ def test_admission_rejects_unavailable_capacity_without_future_return() -> None:
     )
     result = Simulator.from_scenario(scenario, create_scheduler("historical-drf", scenario)).run()
     assert result.jobs[0].rejection_reason == "impossible_gpu_request"
+
+
+def test_fairshare_tie_breaks_by_job_priority_before_queue_id() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": "g0", "memory_gb": 40}],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job("a-low", 0, 1, 1, 20, priority=Priority.LOW, queue_id="a"),
+            Job("z-critical", 0, 1, 1, 20, priority=Priority.CRITICAL, queue_id="z"),
+        ],
+        queues=(
+            QueueSpec("a", "root", limit=ResourceVector(1, 40)),
+            QueueSpec("z", "root", limit=ResourceVector(1, 40)),
+        ),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("drf", scenario)).run()
+    low, critical = result.jobs
+    assert critical.first_start_time == 0
+    assert low.first_start_time == 1
+
+
+def test_guarantee_pass_validates_concrete_weighted_placement() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [
+                        {"id": "cheap", "model": "cheap", "memory_gb": 40},
+                        {"id": "expensive", "model": "expensive", "memory_gb": 40},
+                    ],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job("filler", 0, 10, 1, 20, gpu_model="cheap", queue_id="filler"),
+            Job(
+                "a-flex",
+                1,
+                1,
+                1,
+                20,
+                allowed_gpu_models=("cheap", "expensive"),
+                queue_id="a",
+            ),
+            Job("b-exact", 1, 1, 1, 20, gpu_model="expensive", queue_id="b"),
+        ],
+        queues=(
+            QueueSpec("filler", "root", limit=ResourceVector(2, 80)),
+            QueueSpec("a", "root", guaranteed=ResourceVector(1), limit=ResourceVector(2, 80)),
+            QueueSpec("b", "root", guaranteed=ResourceVector(2), limit=ResourceVector(2, 80)),
+        ),
+        accounting=AccountingPolicy({"cheap": 1, "expensive": 2}),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("fairshare-borrow", scenario)).run()
+    flex = next(job for job in result.jobs if job.id == "a-flex")
+    exact = next(job for job in result.jobs if job.id == "b-exact")
+    assert exact.first_start_time == 1
+    assert flex.first_start_time == 2
+
+
+def test_elastic_job_starts_at_min_before_sibling_guarantee_is_borrowed() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": f"g{index}", "memory_gb": 40} for index in range(2)],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job(
+                "a-elastic",
+                0,
+                10,
+                2,
+                20,
+                queue_id="a",
+                elastic=ElasticSpec(1, 2, 2),
+            ),
+            Job("b-fixed", 0, 1, 1, 20, queue_id="b"),
+        ],
+        queues=(
+            QueueSpec("a", "root", guaranteed=ResourceVector(1), limit=ResourceVector(2, 80)),
+            QueueSpec("b", "root", guaranteed=ResourceVector(1), limit=ResourceVector(1, 40)),
+        ),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("fairshare-borrow", scenario)).run()
+    elastic_start = next(
+        record
+        for record in result.trace
+        if record.event is EventType.JOB_START and record.job_id == "a-elastic"
+    )
+    fixed = next(job for job in result.jobs if job.id == "b-fixed")
+    assert len(elastic_start.gpu_ids) == 1
+    assert fixed.first_start_time == 0
+
+
+def test_hierarchical_reclaim_transfers_only_one_sibling_allocation() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": f"g{index}", "memory_gb": 40} for index in range(3)],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            *[Job(f"a-{index}", 0, 10, 1, 20, queue_id="team/a") for index in range(3)],
+            Job("target", 1, 1, 1, 20, queue_id="team/b"),
+        ],
+        queues=(
+            QueueSpec("team", "root", guaranteed=ResourceVector(2), limit=ResourceVector(3, 120)),
+            QueueSpec("team/a", "team", guaranteed=ResourceVector(1), limit=ResourceVector(3, 120)),
+            QueueSpec("team/b", "team", guaranteed=ResourceVector(1), limit=ResourceVector(1, 40)),
+        ),
+    )
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-reclaim", scenario)
+    ).run()
+    victims = [job for job in result.jobs if job.queue_id == "team/a"]
+    target = next(job for job in result.jobs if job.id == "target")
+    assert sum(job.reclaim_victim_count for job in victims) == 1
+    assert target.first_start_time == 1
+
+
+def test_guarantee_satisfaction_ignores_intervals_without_runnable_demand() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": f"g{index}", "memory_gb": 40} for index in range(2)],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job("a-short", 0, 1, 1, 20, queue_id="a"),
+            Job("b-long", 0, 10, 1, 20, queue_id="b"),
+        ],
+        queues=(
+            QueueSpec("a", "root", guaranteed=ResourceVector(1), limit=ResourceVector(1, 40)),
+            QueueSpec("b", "root", guaranteed=ResourceVector(1), limit=ResourceVector(1, 40)),
+        ),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("drf", scenario)).run()
+    assert result.metrics["queue_metrics"]["a"]["guaranteed_share_satisfaction"] == pytest.approx(1)
+    assert result.metrics["queue_metrics"]["b"]["guaranteed_share_satisfaction"] == pytest.approx(1)
+
+
+def test_guarantee_satisfaction_caps_elastic_demand_at_potential_capacity() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": f"g{index}", "memory_gb": 40} for index in range(2)],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job(
+                "elastic",
+                0,
+                10,
+                4,
+                20,
+                queue_id="elastic",
+                elastic=ElasticSpec(1, 4, 4),
+            ),
+            Job("borrower", 0, 40, 1, 20, queue_id="borrower"),
+        ],
+        queues=(
+            QueueSpec("elastic", "root", guaranteed=ResourceVector(2)),
+            QueueSpec("borrower", "root", limit=ResourceVector(2, 80)),
+        ),
+    )
+
+    result = Simulator.from_scenario(scenario, create_scheduler("drf", scenario)).run()
+
+    satisfaction = result.metrics["queue_metrics"]["elastic"]["guaranteed_share_satisfaction"]
+    assert satisfaction == pytest.approx(0.5)

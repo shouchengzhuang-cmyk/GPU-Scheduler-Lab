@@ -89,18 +89,27 @@ class Cluster:
 
     @property
     def schedulable_nodes(self) -> list[Node]:
-        return [node for node in self.nodes if node.schedulable and node.available]
+        return [node for node in self.nodes if node.gpus and node.schedulable and node.available]
 
     @property
     def active_nodes(self) -> list[Node]:
         """Capacity that exists now, including draining nodes with running work."""
         return [
-            node for node in self.nodes if node.available and (node.schedulable or node.draining)
+            node
+            for node in self.nodes
+            if node.gpus
+            and node.available
+            and (node.schedulable or (node.draining and any(gpu.occupied for gpu in node.gpus)))
         ]
 
     @property
     def active_gpus(self) -> list[GPU]:
-        return [gpu for node in self.active_nodes for gpu in node.gpus]
+        return [
+            gpu
+            for node in self.active_nodes
+            for gpu in node.gpus
+            if node.schedulable or gpu.occupied
+        ]
 
     @property
     def schedulable_gpus(self) -> list[GPU]:

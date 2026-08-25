@@ -6,7 +6,7 @@ from gpu_scheduler_lab.fairshare.accounting import AccountingPolicy
 from gpu_scheduler_lab.fairshare.drf import weighted_dominant_share
 from gpu_scheduler_lab.fairshare.history import DecayedUsageHistory
 from gpu_scheduler_lab.models.cluster import Cluster
-from gpu_scheduler_lab.models.job import Job
+from gpu_scheduler_lab.models.job import Job, JobStatus
 from gpu_scheduler_lab.queues.hierarchy import QueueHierarchy
 from gpu_scheduler_lab.queues.model import ResourceVector
 from gpu_scheduler_lab.schedulers.base import Scheduler
@@ -15,6 +15,9 @@ from gpu_scheduler_lab.schedulers.topology import TopologyAwareScheduler
 
 class FairShareScheduler(Scheduler):
     """Queue allocation policy composed with an independent placement scheduler."""
+
+    dynamic_pending_order = True
+    supports_guarantee_placement = True
 
     def __init__(
         self,
@@ -44,6 +47,7 @@ class FairShareScheduler(Scheduler):
         self._last_rates: dict[str, float] = {}
         self._debts: dict[str, float] = {}
         self._capacity = ResourceVector()
+        self._pending_branches: set[str] = set()
 
     def prepare(
         self,
@@ -54,8 +58,21 @@ class FairShareScheduler(Scheduler):
     ) -> None:
         self.history.integrate(now, self._last_rates)
         self.refresh_usage(cluster, running)
-        self._last_rates = {
-            queue_id: usage.gpu_units for queue_id, usage in self._aggregate_usage.items()
+        demanding_jobs = [
+            *pending,
+            *(
+                job
+                for job in running
+                if job.status is JobStatus.RUNNING
+                and job.elastic is not None
+                and job.current_replicas < job.elastic.preferred_replicas
+            ),
+        ]
+        self._pending_branches = {
+            ancestor
+            for job in demanding_jobs
+            for ancestor in self.hierarchy.ancestors(job.queue_id)
+            if ancestor != "root"
         }
         self._debts = {
             queue_id: self.history.debt(
@@ -97,33 +114,57 @@ class FairShareScheduler(Scheduler):
                 borrowed -= job.borrowed_gpu_units
                 if borrowed <= 0:
                     break
+        self._sync_rates()
 
-    def pending_key(self, job: Job, now: float) -> tuple[float | int | str, ...]:
-        spec = self.hierarchy.specs[job.queue_id]
-        usage = self._aggregate_usage.get(job.queue_id, ResourceVector())
-        capacity = self._capacity
-        guarantee_deficit = self._has_guarantee_deficit(job.queue_id)
-        dominant = weighted_dominant_share(usage, capacity, spec.weight)
-        debt = self._debts.get(job.queue_id, 0.0) if self.historical else 0.0
+    def pending_key(self, job: Job, now: float) -> tuple[Any, ...]:
+        path = tuple(
+            self._queue_pending_key(queue_id)
+            for queue_id in reversed(self.hierarchy.ancestors(job.queue_id))
+            if queue_id != "root"
+        )
+        priority = int(job.priority) + sum(
+            self.hierarchy.specs[queue_id].priority_offset
+            for queue_id in self.hierarchy.ancestors(job.queue_id)
+        )
+        return (
+            path,
+            -priority,
+            job.arrival_time,
+            job.queue_id,
+            job.id,
+        )
+
+    def _queue_pending_key(self, queue_id: str) -> tuple[float | int, ...]:
+        spec = self.hierarchy.specs[queue_id]
+        usage = self._aggregate_usage.get(queue_id, ResourceVector())
+        dimensions = spec.guaranteed_dimensions or frozenset()
+        guarantee_deficit = (
+            "gpu_units" in dimensions and usage.gpu_units + 1e-9 < spec.guaranteed.gpu_units
+        ) or (
+            "gpu_memory_gb" in dimensions
+            and usage.gpu_memory_gb + 1e-9 < spec.guaranteed.gpu_memory_gb
+        )
+        debt = self._debts.get(queue_id, 0.0) if self.historical else 0.0
+        dominant = weighted_dominant_share(usage, self._capacity, spec.weight)
         return (
             0 if guarantee_deficit else 1,
             debt,
             dominant,
-            -(int(job.priority) + spec.priority_offset),
-            job.arrival_time,
-            job.id,
         )
 
     def place(self, cluster: Cluster, job: Job) -> list[str] | None:
-        demand = self.accounting.demand(job, cluster)
-        if not self.hierarchy.can_allocate(
-            job.queue_id,
-            demand,
-            self._direct_usage,
-            borrowing=self.borrowing,
-            aggregate_usage=self._aggregate_usage,
-        ):
-            return None
+        return self._place_with_borrowing(cluster, job, borrowing=self.borrowing)
+
+    def place_guaranteed(self, cluster: Cluster, job: Job) -> list[str] | None:
+        return self._place_with_borrowing(cluster, job, borrowing=False)
+
+    def _place_with_borrowing(
+        self,
+        cluster: Cluster,
+        job: Job,
+        *,
+        borrowing: bool,
+    ) -> list[str] | None:
         placement = self.placement.place(cluster, job)
         if placement is None:
             return None
@@ -132,7 +173,7 @@ class FairShareScheduler(Scheduler):
             job.queue_id,
             actual_demand,
             self._direct_usage,
-            borrowing=self.borrowing,
+            borrowing=borrowing,
             aggregate_usage=self._aggregate_usage,
         ):
             return None
@@ -150,24 +191,101 @@ class FairShareScheduler(Scheduler):
             self._direct_usage.get(job.queue_id, ResourceVector()) + allocation
         )
         self._aggregate_usage = self.hierarchy.aggregate_usage(self._direct_usage)
+        self._sync_rates()
         self.placement.on_job_started(job, now)
 
+    def _sync_rates(self) -> None:
+        self._last_rates = {
+            queue_id: usage.gpu_units for queue_id, usage in self._aggregate_usage.items()
+        }
+
     def can_reclaim(self, victim: Job, incoming: Job) -> bool:
-        if (
-            victim.queue_id == incoming.queue_id
-            or victim.borrowed_gpu_units <= 0
-            or not self._usage_exceeds_guarantee(victim.queue_id)
-        ):
+        boundary = self._reclaim_boundary(victim.queue_id, incoming.queue_id)
+        if boundary is None or not self._boundary_has_reclaimable_surplus(*boundary):
             return False
         return all(
             self.hierarchy.specs[queue_id].reclaimable
             for queue_id in self.hierarchy.ancestors(victim.queue_id)
-        ) and self._has_guarantee_deficit(incoming.queue_id)
+        )
+
+    def can_reclaim_request(self, incoming: Job) -> bool:
+        if self._cluster is None:
+            return False
+        try:
+            demand = self.accounting.minimum_demand(
+                incoming,
+                self._cluster.schedulable_gpus,
+                incoming.requested_gpu_count,
+            )
+        except ValueError:
+            return False
+        return self._demand_fits_entitlement(incoming.queue_id, demand)
+
+    def can_reclaim_placement(
+        self,
+        incoming: Job,
+        gpu_ids: list[str],
+        entitlement_queue_ids: set[str] | None = None,
+    ) -> bool:
+        if self._cluster is None:
+            return False
+        demand = self.accounting.allocation(incoming, self._cluster, gpu_ids)
+        return self._fits_remaining_entitlement(
+            incoming.queue_id,
+            demand,
+            entitlement_queue_ids=entitlement_queue_ids,
+        )
+
+    def reclaim_entitlement_queue(self, victim: Job, incoming: Job) -> str | None:
+        boundary = self._reclaim_boundary(victim.queue_id, incoming.queue_id)
+        return boundary[1] if boundary is not None else None
+
+    def can_reclaim_allocation(
+        self,
+        victim: Job,
+        incoming: Job,
+        released_gpu_ids: list[str],
+        *,
+        allow_indivisible_collateral: bool = False,
+    ) -> bool:
+        if self._cluster is None or not released_gpu_ids or not self.can_reclaim(victim, incoming):
+            return False
+        boundary = self._reclaim_boundary(victim.queue_id, incoming.queue_id)
+        if boundary is None:
+            return False
+        victim_branch, _ = boundary
+        spec = self.hierarchy.specs[victim_branch]
+        usage = self._aggregate_usage.get(victim_branch, ResourceVector())
+        released = self.accounting.allocation(victim, self._cluster, released_gpu_ids)
+        dimensions = spec.guaranteed_dimensions or frozenset()
+        if allow_indivisible_collateral:
+            return True
+        return all(
+            getattr(usage, dimension) - getattr(released, dimension)
+            >= getattr(spec.guaranteed, dimension) - 1e-9
+            for dimension in dimensions
+        )
 
     def can_scale_up(self, job: Job) -> bool:
         if not self.supports_elastic or job.elastic is None:
             return False
-        return self._has_guarantee_deficit(job.queue_id)
+        return self._is_next_fairshare_branch(job.queue_id)
+
+    def _is_next_fairshare_branch(self, queue_id: str) -> bool:
+        path = [item for item in reversed(self.hierarchy.ancestors(queue_id)) if item != "root"]
+        for branch in path:
+            parent = self.hierarchy.specs[branch].parent or "root"
+            contenders = [
+                sibling
+                for sibling in self.hierarchy.children[parent]
+                if sibling == branch or sibling in self._pending_branches
+            ]
+            if len(contenders) <= 1:
+                continue
+            branch_key = self._queue_pending_key(branch)
+            if branch_key > min(self._queue_pending_key(sibling) for sibling in contenders):
+                return False
+        return True
 
     def _has_guarantee_deficit(self, queue_id: str) -> bool:
         for ancestor_id in self.hierarchy.ancestors(queue_id):
@@ -183,22 +301,95 @@ class FairShareScheduler(Scheduler):
                 return True
         return False
 
-    def _usage_exceeds_guarantee(self, queue_id: str) -> bool:
+    def _fits_remaining_entitlement(
+        self,
+        queue_id: str,
+        demand: ResourceVector,
+        *,
+        entitlement_queue_ids: set[str] | None = None,
+    ) -> bool:
+        found = False
+        ancestors = self.hierarchy.ancestors(queue_id)
+        candidates = (
+            ancestors
+            if entitlement_queue_ids is None
+            else tuple(
+                ancestor_id for ancestor_id in ancestors if ancestor_id in entitlement_queue_ids
+            )
+        )
+        for ancestor_id in candidates:
+            spec = self.hierarchy.specs[ancestor_id]
+            dimensions = spec.guaranteed_dimensions or frozenset()
+            if not dimensions:
+                continue
+            found = True
+            projected = self._aggregate_usage.get(ancestor_id, ResourceVector()) + demand
+            if (
+                "gpu_units" in dimensions and projected.gpu_units > spec.guaranteed.gpu_units + 1e-9
+            ) or (
+                "gpu_memory_gb" in dimensions
+                and projected.gpu_memory_gb > spec.guaranteed.gpu_memory_gb + 1e-9
+            ):
+                return False
+        return found
+
+    def _demand_fits_entitlement(self, queue_id: str, demand: ResourceVector) -> bool:
+        found = False
         for ancestor_id in self.hierarchy.ancestors(queue_id):
             spec = self.hierarchy.specs[ancestor_id]
             dimensions = spec.guaranteed_dimensions or frozenset()
-            usage = self._aggregate_usage.get(ancestor_id, ResourceVector())
+            if not dimensions:
+                continue
+            found = True
             if (
-                "gpu_units" in dimensions and usage.gpu_units > spec.guaranteed.gpu_units + 1e-9
+                "gpu_units" in dimensions and demand.gpu_units > spec.guaranteed.gpu_units + 1e-9
             ) or (
                 "gpu_memory_gb" in dimensions
-                and usage.gpu_memory_gb > spec.guaranteed.gpu_memory_gb + 1e-9
+                and demand.gpu_memory_gb > spec.guaranteed.gpu_memory_gb + 1e-9
             ):
-                return True
-        return not any(
-            self.hierarchy.specs[ancestor_id].guaranteed_dimensions
-            for ancestor_id in self.hierarchy.ancestors(queue_id)
+                return False
+        return found
+
+    def _reclaim_boundary(
+        self,
+        victim_queue_id: str,
+        incoming_queue_id: str,
+    ) -> tuple[str, str] | None:
+        victim_path = self.hierarchy.ancestors(victim_queue_id)
+        incoming_path = self.hierarchy.ancestors(incoming_queue_id)
+        incoming_ancestors = set(incoming_path)
+        common_ancestor = next(
+            queue_id for queue_id in victim_path if queue_id in incoming_ancestors
         )
+        victim_index = victim_path.index(common_ancestor)
+        incoming_index = incoming_path.index(common_ancestor)
+        if victim_index == 0 or incoming_index == 0:
+            return None
+        return victim_path[victim_index - 1], incoming_path[incoming_index - 1]
+
+    def _boundary_has_reclaimable_surplus(
+        self,
+        victim_branch: str,
+        incoming_branch: str,
+    ) -> bool:
+        incoming_spec = self.hierarchy.specs[incoming_branch]
+        incoming_usage = self._aggregate_usage.get(incoming_branch, ResourceVector())
+        victim_spec = self.hierarchy.specs[victim_branch]
+        victim_usage = self._aggregate_usage.get(victim_branch, ResourceVector())
+        incoming_dimensions = incoming_spec.guaranteed_dimensions or frozenset()
+        victim_dimensions = victim_spec.guaranteed_dimensions or frozenset()
+        for dimension in incoming_dimensions:
+            incoming_value = getattr(incoming_usage, dimension)
+            incoming_guarantee = getattr(incoming_spec.guaranteed, dimension)
+            victim_value = getattr(victim_usage, dimension)
+            victim_floor = (
+                getattr(victim_spec.guaranteed, dimension)
+                if dimension in victim_dimensions
+                else 0.0
+            )
+            if incoming_value + 1e-9 < incoming_guarantee and victim_value > victim_floor + 1e-9:
+                return True
+        return False
 
     def can_resize(self, job: Job, replicas: int) -> bool:
         if self._cluster is None or replicas <= job.current_replicas:

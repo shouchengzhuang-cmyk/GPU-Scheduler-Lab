@@ -49,13 +49,20 @@ class QueueHierarchy:
     def _validate_child_guarantees(self) -> None:
         for parent_id, child_ids in self.children.items():
             parent = self.specs[parent_id]
-            if parent.limit is None:
-                continue
             aggregate = ResourceVector()
             for child_id in child_ids:
                 aggregate += self.specs[child_id].guaranteed
-            if not aggregate.fits_within(parent.limit):
+            if parent.limit is not None and not aggregate.fits_within(parent.limit):
                 raise ValueError(f"child guarantees exceed parent {parent_id} limit")
+            dimensions = parent.guaranteed_dimensions or frozenset()
+            if (
+                "gpu_units" in dimensions
+                and aggregate.gpu_units > parent.guaranteed.gpu_units + 1e-9
+            ) or (
+                "gpu_memory_gb" in dimensions
+                and aggregate.gpu_memory_gb > parent.guaranteed.gpu_memory_gb + 1e-9
+            ):
+                raise ValueError(f"child guarantees exceed parent {parent_id} guarantee")
 
     def ancestors(self, queue_id: str, *, include_self: bool = True) -> tuple[str, ...]:
         if queue_id not in self.specs:

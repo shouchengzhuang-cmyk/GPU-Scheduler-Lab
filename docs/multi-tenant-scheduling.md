@@ -6,6 +6,8 @@ Guarantee 表示 queue 在有 demand 时应当恢复到的 entitlement，不是�
 
 Queue 的 aggregate usage 来自后代 Job allocation。父 queue 的 average usage、peak、borrowed time、completion 和 rejection 也按后代聚合，避免层级指标与 leaf 结果对不上。
 
+`guaranteed_share_satisfaction` 是 demand-aware 时间积分：区间 entitlement 为 `min(guarantee, aggregate runnable demand)`，区间 satisfied entitlement 为 `min(actual usage, entitlement)`。无 demand 区间不进入 denominator；整个实验没有 entitlement demand 时结果定义为 1。
+
 ## Borrowing
 
 Job 启动时，allocation 先消耗 queue 尚未使用的 guarantee，剩余部分记为 borrowed units。Borrowing 不修改 guarantee，也不会在下一轮变成永久 entitlement。`borrowing_enabled: false` 时，projected aggregate usage 超过 guarantee 就停止 allocation。
@@ -30,7 +32,7 @@ DRF score 只决定 dispatch opportunity。型号、显存、拓扑、gang 和�
 
 ## Historical debt
 
-History 用 logical time 积分 queue 收到的 GPU service，并用配置的 half-life 衰减旧值。Sibling 内 `historical_service / weight` 最小的 queue debt 为 0，其余 queue 的正 debt 表示历史上服务更多。Historical DRF 在 instantaneous usage 相同或接近时让 under-served sibling 先运行。
+History 用 logical time 积分 queue 收到的 GPU service，并用配置的 half-life 衰减旧值。设 $\lambda=\ln(2)/h$，常数 service rate 为 $r$，则 $H(t+\Delta t)=H(t)e^{-\lambda\Delta t}+r(1-e^{-\lambda\Delta t})/\lambda$；因此没有速率变化的区间如何被 event 切分，不会改变结果。Sibling 内 `historical_service / weight` 最小的 queue debt 为 0，其余 queue 的正 debt 表示历史上服务更多。Historical DRF 在 instantaneous usage 相同或接近时让 under-served sibling 先运行。
 
 ## Starvation
 

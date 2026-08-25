@@ -30,9 +30,9 @@ fairshare: {half_life: 300, starvation_threshold: 300}
 
 ## Allocation and reclaim
 
-Queue guarantee 不提前占 GPU。Sibling 空闲时，开启 borrowing 的 queue 可在 ancestor 和自身 limit 内使用空闲 entitlement。每个时间区间记录 guaranteed usage、borrowed usage 和 unused entitlement。
+Queue guarantee 不提前占 GPU。Sibling 空闲时，开启 borrowing 的 queue 可在 ancestor 和自身 limit 内使用空闲 entitlement。Dispatch 先运行 `GUARANTEED_ONLY` pass，再运行 `BORROW_ALLOWED` pass；是否属于 guarantee 以具体 GPU placement 的实际记账为准，不以请求上限近似。每个时间区间记录 guaranteed usage、borrowed usage 和 unused entitlement。
 
-当有 runnable queue 低于 guarantee，reclaim policy 只考虑其他 queue 中标记为 borrowed 的 allocation。Victim 顺序包含 borrowed amount、priority、可释放的适配 GPU、collateral、remaining work、checkpoint/restart cost 和稳定 ID。请求自身超过 guarantee 时，不能抢走 sibling 的 in-guarantee workload。
+当有 runnable queue 低于层级边界上的 guarantee，reclaim policy 只考虑另一 branch 高于自身 entitlement floor 的 allocation。Victim 顺序包含 borrowed amount、priority、可释放的适配 GPU、collateral、remaining work、checkpoint/restart cost 和稳定 ID。Planner 把 elastic shrink 与必要的 whole-job preemption 合并成一次 projected transaction，只有完整 target placement 可行时才提交；请求自身超过 guarantee 时，不能抢走 sibling 的 in-guarantee workload。
 
 ## Fair share
 
@@ -53,11 +53,11 @@ elastic:
     16: 0.82
 ```
 
-Job 至少取得 min 才能原子启动。默认 work rate 等于 replica 数；显式 efficiency curve 会把速率改为 `replicas * efficiency`。Scale-up 只发生在事件边界，目标先到 preferred，单个时间点最多执行一次扩容，避免连续振荡。Reclaim 先从 borrowed elastic allocation 缩到 min，低于 min 只能整体 suspend 或 preempt。
+Job 至少取得 min 才能原子启动。默认 work rate 等于 replica 数；显式 efficiency curve 会把速率改为 `replicas * efficiency`。Scale-up 只发生在事件边界，每增加一个 replica 都重新比较层级 guarantee deficit、weight、historical debt 和当前 usage；同一时间戳内同一 Job 的实际 resize 与 trace 合并一次。Reclaim 先从 borrowed elastic allocation 缩到 min，低于 min 只能整体 suspend 或 preempt。
 
 ## Dynamic fleet
 
-`NODE_JOIN` 增加此前 unavailable 的容量；`NODE_DRAIN` 禁止新 placement，但不终止已有 Job；`NODE_FAIL` 立即使 Node unavailable；`NODE_RECOVER` 恢复 Node；`CAPACITY_REVOKE` 和 `CAPACITY_RETURN` 对 revocable capacity 执行同类撤回与返回语义。
+`NODE_JOIN` 增加此前 unavailable 的容量；`NODE_DRAIN` 禁止新 placement，但不终止已有 Job；`NODE_FAIL` 立即使 Node unavailable；`NODE_RECOVER` 恢复 Node；`CAPACITY_REVOKE` 和 `CAPACITY_RETURN` 对 revocable capacity 执行同类撤回与返回语义。Admission 使用 current 加尚未发生的 future capacity；事件消费后对应 future capacity 会从 potential set 删除。Metrics 使用 active capacity：draining Node 只保留仍被占用的 GPU，排空后立即离开 denominator。
 
 Forced loss 会保留已经结算的 productive work，Job 重新进入 pending/restart 路径。这个 optimistic recovery model 没有模拟 durable checkpoint interval。Revocable GPU 在撤回前仍是普通独占 GPU，没有第二套 ownership。
 
@@ -69,6 +69,8 @@ Forced loss 会保留已经结算的 productive work，Job 重新进入 pending/
 - `stable-fleet.yaml` 与 `revocable-fleet.yaml` 比较稳定和撤回容量。
 
 Experiment 额外输出 queue share、borrowed capacity、fair-share debt、elastic replicas 和 fleet capacity 五张 timeline。Manifest 保存 queue config hash、allocation policy、fairshare config、fleet event hash 和 elastic model version。
+
+`guaranteed_share_satisfaction` 的 denominator 是 queue 在各区间的 `min(guarantee, aggregate runnable demand)`，numerator 是其中被实际 usage 满足的部分。无 demand 区间不计入，整个实验没有 entitlement demand 时结果为 1。
 
 ## Evidence boundary
 

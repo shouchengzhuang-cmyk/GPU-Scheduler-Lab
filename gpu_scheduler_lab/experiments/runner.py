@@ -12,6 +12,7 @@ from gpu_scheduler_lab.allocation.allocator import FairShareScheduler
 from gpu_scheduler_lab.experiments.aggregation import aggregate_runs
 from gpu_scheduler_lab.experiments.config import ExperimentConfig
 from gpu_scheduler_lab.experiments.manifest import git_sha, python_version, scenario_hash
+from gpu_scheduler_lab.fleet.events import FleetEventType
 from gpu_scheduler_lab.queues.hierarchy import QueueHierarchy
 from gpu_scheduler_lab.queues.model import QueueSpec, ResourceVector
 from gpu_scheduler_lab.scenario import Scenario, load_scenario
@@ -193,14 +194,31 @@ def _apply_tenant_overlay(scenario: Scenario, workload: dict[str, Any]) -> Scena
     tenant_count = int(workload.get("tenant_count", 0))
     if tenant_count <= 0:
         return scenario
-    total_gpus = scenario.cluster.total_gpu_count
-    guarantee = total_gpus / tenant_count if tenant_count else 0.0
+    potential_node_ids = {node.id for node in scenario.cluster.schedulable_nodes}
+    potential_node_ids.update(
+        event.node_id
+        for event in scenario.fleet_events
+        if event.event_type
+        in {
+            FleetEventType.NODE_JOIN,
+            FleetEventType.NODE_RECOVER,
+            FleetEventType.CAPACITY_RETURN,
+        }
+    )
+    potential_gpus = [
+        gpu for node in scenario.cluster.nodes if node.id in potential_node_ids for gpu in node.gpus
+    ]
+    total_gpu_units = sum(
+        scenario.accounting.model_weights.get(gpu.model, 1.0) for gpu in potential_gpus
+    )
+    total_memory_gb = sum(gpu.memory_capacity_gb for gpu in potential_gpus)
+    guarantee = total_gpu_units / tenant_count
     scenario.queues = tuple(
         QueueSpec(
             f"tenant-{index:02d}",
             "root",
             guaranteed=ResourceVector(guarantee),
-            limit=ResourceVector(float(total_gpus), scenario.cluster.total_memory_gb),
+            limit=ResourceVector(total_gpu_units, total_memory_gb),
         )
         for index in range(tenant_count)
     )

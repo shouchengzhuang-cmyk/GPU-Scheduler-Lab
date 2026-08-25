@@ -3,6 +3,7 @@ from __future__ import annotations
 import heapq
 import math
 import time
+from copy import copy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +21,7 @@ from gpu_scheduler_lab.models.topology import (
     topology_domain,
     topology_requirement_satisfied,
 )
+from gpu_scheduler_lab.queues.model import ResourceVector
 from gpu_scheduler_lab.schedulers.base import Scheduler
 from gpu_scheduler_lab.schedulers.gang import validate_atomic_placement
 
@@ -84,22 +86,25 @@ class Simulator:
         self.scheduler = scheduler
         self.scenario = scenario
         self.accounting = scenario.accounting if scenario is not None else AccountingPolicy()
+        self._remaining_capacity_returns: dict[str, int] = {}
+        if scenario is not None:
+            for event in scenario.fleet_events:
+                if event.event_type in {
+                    FleetEventType.NODE_JOIN,
+                    FleetEventType.NODE_RECOVER,
+                    FleetEventType.CAPACITY_RETURN,
+                }:
+                    self._remaining_capacity_returns[event.node_id] = (
+                        self._remaining_capacity_returns.get(event.node_id, 0) + 1
+                    )
+        potential_node_ids = set(self._remaining_capacity_returns)
         self.admission = (
             AdmissionController(
                 scheduler.hierarchy,
                 self.cluster,
                 self.accounting,
                 scenario.admission_mode,
-                {
-                    event.node_id
-                    for event in scenario.fleet_events
-                    if event.event_type
-                    in {
-                        FleetEventType.NODE_JOIN,
-                        FleetEventType.NODE_RECOVER,
-                        FleetEventType.CAPACITY_RETURN,
-                    }
-                },
+                potential_node_ids,
             )
             if scenario is not None and hasattr(scheduler, "hierarchy")
             else None
@@ -116,6 +121,8 @@ class Simulator:
         self._suspended_victims: dict[str, Job] = {}
         self._preemption_target_by_victim: dict[str, str] = {}
         self._preemption_reserved_gpus: dict[str, set[str]] = {}
+        self._preemption_reservation_reason: dict[str, str] = {}
+        self._preemption_reclaim_entitlements: dict[str, set[str]] = {}
         self.trace: list[TraceRecord] = []
         self._events: list[Event] = []
         self._sequence = 0
@@ -141,6 +148,10 @@ class Simulator:
         self._queue_gpu_area: dict[str, float] = {}
         self._queue_peak: dict[str, float] = {}
         self._queue_borrowed_area: dict[str, float] = {}
+        self._queue_entitled_demand_area: dict[str, float] = {}
+        self._queue_satisfied_entitlement_area: dict[str, float] = {}
+        self._direct_runnable_demand: dict[str, ResourceVector] = {}
+        self._runnable_demand_by_job: dict[str, ResourceVector] = {}
         self._queue_timeline: list[dict[str, Any]] = []
         self._elastic_timeline: list[dict[str, Any]] = []
         self._fleet_timeline: list[dict[str, Any]] = []
@@ -175,9 +186,13 @@ class Simulator:
 
         now = 0.0
         while self._events:
-            self._discard_obsolete_ticks()
-            self._discard_stale_generation_events()
-            self._discard_aging_ticks_without_running_jobs()
+            while self._events:
+                event_count = len(self._events)
+                self._discard_obsolete_ticks()
+                self._discard_stale_generation_events()
+                self._discard_aging_ticks_without_running_jobs()
+                if len(self._events) == event_count:
+                    break
             if not self._events:
                 break
             event_time = self._events[0].time
@@ -287,6 +302,7 @@ class Simulator:
         else:
             job.admission_time = now
         self.pending.append(job)
+        self._add_runnable_demand(job)
         self.trace.append(TraceRecord(now, EventType.JOB_ARRIVAL, job.id))
         self._schedule_aging_tick(job, now)
 
@@ -359,6 +375,7 @@ class Simulator:
         node_ids = self._node_ids(gpu_ids)
         self.cluster.release(job)
         self.running.pop(job.id)
+        self._remove_runnable_demand(job)
         job.status = JobStatus.COMPLETED
         job.completion_time = now
         job.last_start_time = None
@@ -378,11 +395,25 @@ class Simulator:
         self.pending.sort(key=lambda job: self.scheduler.pending_key(job, now))
         initial = tuple(self.pending)
         initial_ids = {job.id for job in initial}
-        for job in initial:
-            if self._placement_cannot_change_without_release():
-                break
-            if job.status is JobStatus.PENDING:
-                self._attempt_placement(job, now, allow_preemption=True)
+        if self.scheduler.supports_guarantee_placement:
+            self._dispatch_pending(
+                initial,
+                now,
+                guaranteed_only=True,
+                allow_preemption=False,
+            )
+            allocated = [
+                *self.running.values(),
+                *self.checkpointing.values(),
+                *self.restarting.values(),
+            ]
+            self.scheduler.prepare(now, self.cluster, self.pending, allocated)
+        self._dispatch_pending(
+            tuple(self.pending),
+            now,
+            guaranteed_only=False,
+            allow_preemption=True,
+        )
 
         # Victims added during this pass get one immediate resume opportunity, so
         # preemption cannot leave unrelated capacity idle until the next event.
@@ -396,6 +427,31 @@ class Simulator:
             if job.status is JobStatus.PENDING:
                 self._attempt_placement(job, now, allow_preemption=False)
 
+    def _dispatch_pending(
+        self,
+        candidates: tuple[Job, ...],
+        now: float,
+        *,
+        guaranteed_only: bool,
+        allow_preemption: bool,
+    ) -> None:
+        remaining = list(candidates)
+        while remaining:
+            if self._placement_cannot_change_without_release():
+                break
+            if self.scheduler.dynamic_pending_order:
+                job = min(remaining, key=lambda item: self.scheduler.pending_key(item, now))
+                remaining.remove(job)
+            else:
+                job = remaining.pop(0)
+            if job.status is JobStatus.PENDING:
+                self._attempt_placement(
+                    job,
+                    now,
+                    allow_preemption=allow_preemption,
+                    guaranteed_only=guaranteed_only,
+                )
+
     def _placement_cannot_change_without_release(self) -> bool:
         return (
             not self.scheduler.supports_preemption
@@ -403,17 +459,46 @@ class Simulator:
             and not any(gpu.free for gpu in self.cluster.schedulable_gpus)
         )
 
-    def _attempt_placement(self, job: Job, now: float, *, allow_preemption: bool) -> bool:
+    def _attempt_placement(
+        self,
+        job: Job,
+        now: float,
+        *,
+        allow_preemption: bool,
+        guaranteed_only: bool = False,
+    ) -> bool:
         self._scheduling_attempts += 1
         placement = None
+        reclaim_reservation = self._preemption_reservation_reason.get(job.id) == "PREEMPT_RECLAIM"
+        reclaim_entitlements = self._preemption_reclaim_entitlements.get(job.id, set())
         requests = [job.gpu_count]
         if job.elastic is not None and self.scheduler.supports_elastic:
-            requests = list(range(job.elastic.preferred_replicas, job.elastic.min_replicas - 1, -1))
+            requests = [job.elastic.min_replicas]
+        place = self.scheduler.place_guaranteed if guaranteed_only else self.scheduler.place
         for replicas in requests:
             job.requested_replicas = replicas
-            placement = self.scheduler.place(self._placement_cluster(job), job)
+            placement = place(self._placement_cluster(job), job)
+            if (
+                placement is not None
+                and reclaim_reservation
+                and not self.scheduler.can_reclaim_placement(
+                    job,
+                    placement,
+                    reclaim_entitlements,
+                )
+            ):
+                placement = None
+                continue
             if placement is not None:
                 break
+        if reclaim_reservation and placement is None:
+            reserved = self._preemption_reserved_gpus.get(job.id, set())
+            if all(self.cluster.gpu_by_id(gpu_id).free for gpu_id in reserved):
+                self._release_preemption_reservation(job.id, now)
+            self._failed_attempts += 1
+            return False
+        if guaranteed_only and placement is None:
+            return False
         if placement is None:
             self._failed_attempts += 1
             if allow_preemption and self.scheduler.supports_preemption:
@@ -468,32 +553,21 @@ class Simulator:
         self._schedule_completion(job, now)
 
     def _preempt_for(self, incoming: Job, now: float, *, reason: str) -> list[str] | None:
+        if reason == "PREEMPT_RECLAIM":
+            return self._reclaim_for(incoming, now)
         incoming_priority = incoming.effective_priority(now, self.scheduler.aging_interval)
-        if reason == "PREEMPT_RECLAIM" and self._shrink_elastic_for_reclaim(incoming, now):
-            allocated = [
-                *self.running.values(),
-                *self.checkpointing.values(),
-                *self.restarting.values(),
-            ]
-            self.scheduler.prepare(now, self.cluster, self.pending, allocated)
-            placement = self.scheduler.place(self._placement_cluster(incoming), incoming)
-            if placement is not None:
-                return placement
-        victims = []
-        for job in self.running.values():
-            if not any(
+        victims = [
+            job
+            for job in self.running.values()
+            if any(
                 self.cluster.gpu_by_id(gpu_id).is_compatible(incoming)
                 for gpu_id in job.allocated_gpu_ids
-            ):
-                continue
-            if reason == "PREEMPT_RECLAIM":
-                if self.scheduler.can_reclaim(job, incoming):
-                    victims.append(job)
-            elif (
+            )
+            and (
                 job.effective_priority(now, self.scheduler.aging_interval) < incoming_priority
                 and job.priority < incoming.priority
-            ):
-                victims.append(job)
+            )
+        ]
         victims.sort(
             key=lambda job: (
                 job.effective_priority(now, self.scheduler.aging_interval),
@@ -522,16 +596,231 @@ class Simulator:
         defer_victims = any(victim.checkpoint_cost > 0 for victim in selected)
         if defer_victims:
             self._preemption_reserved_gpus[incoming.id] = set(projected_placement)
+            self._preemption_reservation_reason[incoming.id] = reason
             for victim in selected:
                 self._preemption_target_by_victim[victim.id] = incoming.id
         for victim in selected:
             self._begin_preemption(victim, now, incoming.id, reason)
         if defer_victims:
             return None
+        allocated = [
+            *self.running.values(),
+            *self.checkpointing.values(),
+            *self.restarting.values(),
+        ]
+        self.scheduler.prepare(now, self.cluster, self.pending, allocated)
         self._scheduling_attempts += 1
         placement = self.scheduler.place(self._placement_cluster(incoming), incoming)
         if placement is None:
             self._failed_attempts += 1
+        return placement
+
+    def _reclaim_for(self, incoming: Job, now: float) -> list[str] | None:
+        if not self.scheduler.can_reclaim_request(incoming):
+            return None
+        actual_allocated = [
+            *self.running.values(),
+            *self.checkpointing.values(),
+            *self.restarting.values(),
+        ]
+        projected = self._placement_cluster(incoming).clone(preserve_allocations=True)
+        projected_jobs: dict[str, Job] = {}
+        for job in actual_allocated:
+            projected_job = copy(job)
+            projected_job.allocated_gpu_ids = list(job.allocated_gpu_ids)
+            projected_jobs[job.id] = projected_job
+        allocated_order = [job.id for job in actual_allocated]
+        planned_targets: dict[str, list[str]] = {}
+        preempted_ids: list[str] = []
+        entitlement_queue_ids: set[str] = set()
+
+        def projected_allocated() -> list[Job]:
+            preempted = set(preempted_ids)
+            return [projected_jobs[job_id] for job_id in allocated_order if job_id not in preempted]
+
+        def refresh_projected() -> None:
+            self.scheduler.prepare(now, projected, self.pending, projected_allocated())
+
+        def target_placement() -> list[str] | None:
+            placement = self.scheduler.place(projected, incoming)
+            if placement is None or not self.scheduler.can_reclaim_placement(
+                incoming,
+                placement,
+                entitlement_queue_ids,
+            ):
+                return None
+            return placement
+
+        refresh_projected()
+        projected_placement: list[str] | None = None
+        while projected_placement is None:
+            elastic_actions: list[tuple[tuple[Any, ...], str, str, str]] = []
+            for job in self.running.values():
+                projected_job = projected_jobs[job.id]
+                if (
+                    projected_job.elastic is None
+                    or projected_job.current_replicas <= projected_job.elastic.min_replicas
+                    or not self.scheduler.can_reclaim(projected_job, incoming)
+                ):
+                    continue
+                entitlement = self.scheduler.reclaim_entitlement_queue(projected_job, incoming)
+                if entitlement is None:
+                    continue
+                for gpu_id in projected_job.allocated_gpu_ids:
+                    gpu = projected.gpu_by_id(gpu_id)
+                    if not gpu.is_compatible(incoming) or not self.scheduler.can_reclaim_allocation(
+                        projected_job,
+                        incoming,
+                        [gpu_id],
+                    ):
+                        continue
+                    elastic_actions.append(
+                        (
+                            (
+                                projected_job.effective_priority(
+                                    now, self.scheduler.aging_interval
+                                ),
+                                -self.accounting.model_weights.get(gpu.model, 1.0),
+                                self._remaining_productive_runtime(job, now),
+                                job.checkpoint_cost + job.restart_cost,
+                                job.id,
+                                gpu_id,
+                            ),
+                            job.id,
+                            gpu_id,
+                            entitlement,
+                        )
+                    )
+            if not elastic_actions:
+                break
+            _, job_id, gpu_id, entitlement = min(elastic_actions, key=lambda item: item[0])
+            projected_job = projected_jobs[job_id]
+            target = [item for item in projected_job.allocated_gpu_ids if item != gpu_id]
+            planned_targets[job_id] = target
+            projected_job.allocated_gpu_ids = list(target)
+            projected_job.current_replicas = len(target)
+            gpu = projected.gpu_by_id(gpu_id)
+            gpu.owner_job_id = None
+            gpu.allocated_memory_gb = 0.0
+            entitlement_queue_ids.add(entitlement)
+            refresh_projected()
+            projected_placement = target_placement()
+
+        while projected_placement is None:
+            victim_actions: list[tuple[tuple[Any, ...], str, str]] = []
+            for job in self.running.values():
+                if job.id in preempted_ids:
+                    continue
+                projected_job = projected_jobs[job.id]
+                released = list(projected_job.allocated_gpu_ids)
+                if (
+                    not released
+                    or not any(
+                        projected.gpu_by_id(gpu_id).is_compatible(incoming) for gpu_id in released
+                    )
+                    or not self.scheduler.can_reclaim(projected_job, incoming)
+                    or not self.scheduler.can_reclaim_allocation(
+                        projected_job,
+                        incoming,
+                        released,
+                        allow_indivisible_collateral=True,
+                    )
+                ):
+                    continue
+                entitlement = self.scheduler.reclaim_entitlement_queue(projected_job, incoming)
+                if entitlement is None:
+                    continue
+                suitable = sum(
+                    projected.gpu_by_id(gpu_id).is_compatible(incoming) for gpu_id in released
+                )
+                victim_actions.append(
+                    (
+                        (
+                            projected_job.effective_priority(now, self.scheduler.aging_interval),
+                            -suitable,
+                            len(released),
+                            self._remaining_productive_runtime(job, now),
+                            job.checkpoint_cost + job.restart_cost,
+                            -job.borrowed_gpu_units,
+                            job.id,
+                        ),
+                        job.id,
+                        entitlement,
+                    )
+                )
+            if not victim_actions:
+                break
+            _, job_id, entitlement = min(victim_actions, key=lambda item: item[0])
+            projected_job = projected_jobs[job_id]
+            for gpu_id in projected_job.allocated_gpu_ids:
+                gpu = projected.gpu_by_id(gpu_id)
+                gpu.owner_job_id = None
+                gpu.allocated_memory_gb = 0.0
+            projected_job.allocated_gpu_ids = []
+            projected_job.current_replicas = 0
+            planned_targets.pop(job_id, None)
+            preempted_ids.append(job_id)
+            entitlement_queue_ids.add(entitlement)
+            refresh_projected()
+            projected_placement = target_placement()
+
+        self.scheduler.prepare(now, self.cluster, self.pending, actual_allocated)
+        if projected_placement is None:
+            return None
+
+        for job_id, target in sorted(planned_targets.items()):
+            job = self.running[job_id]
+            if target == job.allocated_gpu_ids:
+                continue
+            self._accrue_productive_work(job, now)
+            old = job.current_replicas
+            self.cluster.resize(job, target)
+            job.current_replicas = len(target)
+            job.requested_replicas = len(target)
+            job.elastic_scale_down_count += 1
+            job.resize_churn_count += 1
+            job.run_generation += 1
+            job.last_start_time = now
+            self._last_resize_time[job.id] = now
+            gpu_ids = tuple(target)
+            self.trace.append(
+                TraceRecord(
+                    now,
+                    EventType.ELASTIC_SCALE_DOWN,
+                    job.id,
+                    gpu_ids,
+                    self._node_ids(gpu_ids),
+                    detail=f"reason=PREEMPT_RECLAIM;replicas={old}->{len(target)}",
+                )
+            )
+            self._schedule_completion(job, now)
+
+        selected = [self.running[job_id] for job_id in preempted_ids]
+        defer_victims = any(victim.checkpoint_cost > 0 for victim in selected)
+        if defer_victims:
+            self._preemption_reserved_gpus[incoming.id] = set(projected_placement)
+            self._preemption_reservation_reason[incoming.id] = "PREEMPT_RECLAIM"
+            self._preemption_reclaim_entitlements[incoming.id] = set(entitlement_queue_ids)
+            for victim in selected:
+                self._preemption_target_by_victim[victim.id] = incoming.id
+        for victim in selected:
+            self._begin_preemption(victim, now, incoming.id, "PREEMPT_RECLAIM")
+        if defer_victims:
+            return None
+
+        allocated = [
+            *self.running.values(),
+            *self.checkpointing.values(),
+            *self.restarting.values(),
+        ]
+        self.scheduler.prepare(now, self.cluster, self.pending, allocated)
+        placement = self.scheduler.place(self._placement_cluster(incoming), incoming)
+        if placement is None or not self.scheduler.can_reclaim_placement(
+            incoming,
+            placement,
+            entitlement_queue_ids,
+        ):
+            raise RuntimeError("committed reclaim plan did not preserve target placement")
         return placement
 
     def _suitable_gpu_count(self, victim: Job, incoming: Job) -> int:
@@ -654,6 +943,8 @@ class Simulator:
         if incoming_id not in self._preemption_reserved_gpus:
             return
         self._preemption_reserved_gpus.pop(incoming_id)
+        self._preemption_reservation_reason.pop(incoming_id, None)
+        self._preemption_reclaim_entitlements.pop(incoming_id, None)
         victim_ids = [
             victim_id
             for victim_id, target in self._preemption_target_by_victim.items()
@@ -742,6 +1033,18 @@ class Simulator:
             node.available = True
             node.draining = False
             node.schedulable = True
+        if event.event_type in {
+            EventType.NODE_JOIN,
+            EventType.NODE_RECOVER,
+            EventType.CAPACITY_RETURN,
+        }:
+            remaining = self._remaining_capacity_returns[node.id] - 1
+            if remaining:
+                self._remaining_capacity_returns[node.id] = remaining
+            else:
+                self._remaining_capacity_returns.pop(node.id)
+                if self.admission is not None:
+                    self.admission.potential_node_ids.discard(node.id)
         self.trace.append(
             TraceRecord(
                 now,
@@ -827,59 +1130,77 @@ class Simulator:
     def _resize_elastic_jobs(self, now: float) -> None:
         if not self.scheduler.supports_elastic or not self._elastic_jobs:
             return
-        for job in sorted(self.running.values(), key=lambda item: item.id):
-            if (
-                job.elastic is None
-                or job.current_replicas >= job.elastic.preferred_replicas
-                or self._last_resize_time.get(job.id) == now
-                or not self.scheduler.can_scale_up(job)
-            ):
-                continue
-            target: list[str] | None = None
-            for replicas in range(
-                job.elastic.preferred_replicas,
-                job.current_replicas,
-                -1,
-            ):
-                if not self.scheduler.can_resize(job, replicas):
+        blocked = {
+            job_id for job_id, resized_at in self._last_resize_time.items() if resized_at == now
+        }
+        original_replicas: dict[str, int] = {}
+        while True:
+            allocated = [
+                *self.running.values(),
+                *self.checkpointing.values(),
+                *self.restarting.values(),
+            ]
+            self.scheduler.prepare(now, self.cluster, self.pending, allocated)
+            candidates = sorted(
+                (
+                    job
+                    for job in self.running.values()
+                    if job.elastic is not None
+                    and job.id not in blocked
+                    and job.current_replicas < job.elastic.preferred_replicas
+                    and self.scheduler.can_scale_up(job)
+                ),
+                key=lambda job: self.scheduler.scale_up_key(job, now),
+            )
+            resized = False
+            for job in candidates:
+                target = self._elastic_resize_target(job, job.current_replicas + 1)
+                if target is None or not self.scheduler.can_resize_placement(job, target):
                     continue
-                candidate = self._elastic_resize_target(job, replicas)
-                if candidate is not None and self.scheduler.can_resize_placement(job, candidate):
-                    target = candidate
-                    break
-            if target is None:
-                continue
-            self._accrue_productive_work(job, now)
-            old = job.current_replicas
-            self.cluster.resize(job, target)
-            job.current_replicas = len(target)
-            job.requested_replicas = len(target)
+                if job.id not in original_replicas:
+                    self._accrue_productive_work(job, now)
+                    original_replicas[job.id] = job.current_replicas
+                self.cluster.resize(job, target)
+                job.current_replicas = len(target)
+                job.requested_replicas = len(target)
+                job.last_start_time = now
+                resized = True
+                break
+            if not resized:
+                break
+        for job_id, old in sorted(original_replicas.items()):
+            job = self.running[job_id]
             job.elastic_scale_up_count += 1
             job.resize_churn_count += 1
             job.run_generation += 1
-            job.last_start_time = now
             self._last_resize_time[job.id] = now
-            node_ids = self._node_ids(tuple(target))
-            self._record_topology_placement(job, tuple(target), node_ids)
+            gpu_ids = tuple(job.allocated_gpu_ids)
+            node_ids = self._node_ids(gpu_ids)
+            self._record_topology_placement(job, gpu_ids, node_ids)
             self.trace.append(
                 TraceRecord(
                     now,
                     EventType.ELASTIC_SCALE_UP,
                     job.id,
-                    tuple(target),
+                    gpu_ids,
                     node_ids,
-                    detail=f"replicas={old}->{len(target)}",
+                    detail=f"replicas={old}->{job.current_replicas}",
                 )
             )
             self._schedule_completion(job, now)
-            break
 
     def _elastic_resize_target(self, job: Job, replicas: int) -> list[str] | None:
         needed = replicas - job.current_replicas
         if needed <= 0:
             return None
+        reserved = {
+            gpu_id
+            for target_id, gpu_ids in self._preemption_reserved_gpus.items()
+            if target_id != job.id
+            for gpu_id in gpu_ids
+        }
         free = sorted(
-            self.cluster.eligible_gpus(job),
+            (gpu for gpu in self.cluster.eligible_gpus(job) if gpu.id not in reserved),
             key=lambda gpu: (
                 self.accounting.model_weights.get(gpu.model, 1.0),
                 gpu.node_id,
@@ -898,48 +1219,6 @@ class Simulator:
             if len(selected) == needed:
                 return [*job.allocated_gpu_ids, *selected]
         return None
-
-    def _shrink_elastic_for_reclaim(self, incoming: Job, now: float) -> bool:
-        changed = False
-        candidates = sorted(
-            (
-                job
-                for job in self.running.values()
-                if job.elastic is not None
-                and job.current_replicas > job.elastic.min_replicas
-                and self.scheduler.can_reclaim(job, incoming)
-            ),
-            key=lambda job: (-job.borrowed_gpu_units, job.id),
-        )
-        for job in candidates:
-            assert job.elastic is not None
-            self._accrue_productive_work(job, now)
-            old = job.current_replicas
-            target = sorted(job.allocated_gpu_ids)[: job.elastic.min_replicas]
-            self.cluster.resize(job, target)
-            job.current_replicas = len(target)
-            job.requested_replicas = len(target)
-            job.borrowed_gpu_units = 0.0
-            job.elastic_scale_down_count += 1
-            job.resize_churn_count += 1
-            job.run_generation += 1
-            job.last_start_time = now
-            self._last_resize_time[job.id] = now
-            self.trace.append(
-                TraceRecord(
-                    now,
-                    EventType.ELASTIC_SCALE_DOWN,
-                    job.id,
-                    tuple(target),
-                    self._node_ids(tuple(target)),
-                    detail=f"reason=PREEMPT_RECLAIM;replicas={old}->{len(target)}",
-                )
-            )
-            self._schedule_completion(job, now)
-            changed = True
-            if len(self.cluster.eligible_gpus(incoming)) >= incoming.requested_gpu_count:
-                break
-        return changed
 
     def _record_phase3_timeline(self, now: float) -> None:
         if hasattr(self.scheduler, "queue_snapshot") and hasattr(self.scheduler, "refresh_usage"):
@@ -960,15 +1239,15 @@ class Simulator:
                     "replicas": {job.id: job.current_replicas for job in self._elastic_jobs},
                 },
             )
+        active_gpus = self.cluster.active_gpus
+        revocable_node_ids = {node.id for node in self.cluster.nodes if node.revocable}
         self._append_timeline(
             self._fleet_timeline,
             {
                 "time": now,
                 "schedulable_gpus": self.cluster.total_gpu_count,
-                "active_gpus": len(self.cluster.active_gpus),
-                "revocable_gpus": sum(
-                    len(node.gpus) for node in self.cluster.schedulable_nodes if node.revocable
-                ),
+                "active_gpus": len(active_gpus),
+                "revocable_gpus": sum(gpu.node_id in revocable_node_ids for gpu in active_gpus),
             },
         )
 
@@ -977,6 +1256,43 @@ class Simulator:
         if len(timeline) >= 1024:
             timeline[:] = timeline[::2]
         timeline.append(point)
+
+    def _add_runnable_demand(self, job: Job) -> None:
+        potential_node_ids = (
+            self.admission.potential_node_ids if self.admission is not None else set()
+        )
+        compatible = [
+            gpu
+            for node in self.cluster.nodes
+            if (node.available and node.schedulable) or node.id in potential_node_ids
+            for gpu in node.gpus
+            if gpu.is_compatible(job)
+        ]
+        replicas = min(job.preferred_gpu_count, len(compatible))
+        if replicas < job.minimum_gpu_count:
+            return
+        try:
+            demand = self.accounting.minimum_demand(
+                job,
+                compatible,
+                replicas,
+            )
+        except ValueError:
+            return
+        self._runnable_demand_by_job[job.id] = demand
+        self._direct_runnable_demand[job.queue_id] = (
+            self._direct_runnable_demand.get(job.queue_id, ResourceVector()) + demand
+        )
+
+    def _remove_runnable_demand(self, job: Job) -> None:
+        demand = self._runnable_demand_by_job.pop(job.id, None)
+        if demand is None:
+            return
+        remaining = self._direct_runnable_demand.get(job.queue_id, ResourceVector()) - demand
+        if remaining == ResourceVector():
+            self._direct_runnable_demand.pop(job.queue_id, None)
+        else:
+            self._direct_runnable_demand[job.queue_id] = remaining
 
     def _phase3_metrics(self, horizon: float) -> dict[str, Any]:
         admitted = [job for job in self.jobs if job.admission_time is not None]
@@ -1007,6 +1323,10 @@ class Simulator:
                     if job.first_start_time is not None and job.admission_time is not None
                 ]
                 service_quality = self._queue_service_quality(queue_jobs)
+                entitled_demand_area = self._queue_entitled_demand_area.get(queue_id, 0.0)
+                satisfied_entitlement_area = self._queue_satisfied_entitlement_area.get(
+                    queue_id, 0.0
+                )
                 queue_metrics[queue_id] = {
                     "guaranteed_gpu_units": guarantee,
                     "max_gpu_units": spec.limit.gpu_units if spec.limit is not None else None,
@@ -1014,7 +1334,9 @@ class Simulator:
                     "peak_gpu_usage": self._queue_peak.get(queue_id, 0.0),
                     "borrowed_gpu_time": self._queue_borrowed_area.get(queue_id, 0.0),
                     "guaranteed_share_satisfaction": (
-                        min(1.0, average / guarantee) if guarantee else 1.0
+                        min(1.0, satisfied_entitlement_area / entitled_demand_area)
+                        if entitled_demand_area
+                        else 1.0
                     ),
                     "admission_wait": 0.0,
                     "scheduling_wait": sum(waits) / len(waits) if waits else 0.0,
@@ -1144,34 +1466,34 @@ class Simulator:
     def _integrate_state(self, delta: float) -> None:
         if delta <= 0:
             return
-        busy = sum(gpu.occupied for gpu in self.cluster.active_gpus)
-        allocated_memory = sum(gpu.allocated_memory_gb for gpu in self.cluster.active_gpus)
+        active_gpus = self.cluster.active_gpus
+        revocable_node_ids = {node.id for node in self.cluster.nodes if node.revocable}
+        busy = sum(gpu.occupied for gpu in active_gpus)
+        allocated_memory = sum(gpu.allocated_memory_gb for gpu in active_gpus)
         active_nodes = sum(
             any(gpu.occupied for gpu in node.gpus) for node in self.cluster.active_nodes
         )
         count_fragmentation, memory_fragmentation, _ = fragmentation_snapshot(self.cluster)
         self._busy_gpu_time += busy * delta
-        self._gpu_capacity_area += len(self.cluster.active_gpus) * delta
-        self._memory_capacity_area += (
-            sum(gpu.memory_capacity_gb for gpu in self.cluster.active_gpus) * delta
-        )
+        self._gpu_capacity_area += len(active_gpus) * delta
+        self._memory_capacity_area += sum(gpu.memory_capacity_gb for gpu in active_gpus) * delta
         self._active_node_area += len(self.cluster.active_nodes) * delta
         self._revocable_gpu_time += (
-            sum(len(node.gpus) for node in self.cluster.active_nodes if node.revocable) * delta
+            sum(gpu.node_id in revocable_node_ids for gpu in active_gpus) * delta
         )
         self._stable_gpu_time += (
-            sum(len(node.gpus) for node in self.cluster.active_nodes if not node.revocable) * delta
+            sum(gpu.node_id not in revocable_node_ids for gpu in active_gpus) * delta
         )
         self._memory_area += allocated_memory * delta
         self._node_area += active_nodes * delta
         self._count_fragmentation_area += count_fragmentation * delta
         self._memory_fragmentation_area += memory_fragmentation * delta
-        if self.cluster.active_gpus:
-            self._peak_gpu_utilization = max(
-                self._peak_gpu_utilization, busy / len(self.cluster.active_gpus)
-            )
-        if hasattr(self.scheduler, "queue_snapshot"):
+        if active_gpus:
+            self._peak_gpu_utilization = max(self._peak_gpu_utilization, busy / len(active_gpus))
+        if hasattr(self.scheduler, "hierarchy") and hasattr(self.scheduler, "queue_snapshot"):
             snapshot = self.scheduler.queue_snapshot()
+            hierarchy = self.scheduler.hierarchy
+            aggregate_demand = hierarchy.aggregate_usage(self._direct_runnable_demand)
             for queue_id, values in snapshot.items():
                 usage = values["gpu_units"]
                 borrowed = values["borrowed_usage"]
@@ -1182,6 +1504,20 @@ class Simulator:
                     self._queue_borrowed_area.get(queue_id, 0.0) + borrowed * delta
                 )
                 self._queue_peak[queue_id] = max(self._queue_peak.get(queue_id, 0.0), usage)
+                spec = hierarchy.specs[queue_id]
+                if "gpu_units" in (spec.guaranteed_dimensions or ()):
+                    entitled_demand = min(
+                        spec.guaranteed.gpu_units,
+                        aggregate_demand[queue_id].gpu_units,
+                    )
+                    self._queue_entitled_demand_area[queue_id] = (
+                        self._queue_entitled_demand_area.get(queue_id, 0.0)
+                        + entitled_demand * delta
+                    )
+                    self._queue_satisfied_entitlement_area[queue_id] = (
+                        self._queue_satisfied_entitlement_area.get(queue_id, 0.0)
+                        + min(usage, entitled_demand) * delta
+                    )
         for job in self.running.values():
             if job.elastic is None:
                 continue
