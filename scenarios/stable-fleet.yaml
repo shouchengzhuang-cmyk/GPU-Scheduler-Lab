@@ -1,0 +1,26 @@
+metadata:
+  name: stable-fleet
+nodes:
+  - id: stable
+    gpus:
+      - {id: s0, memory_gb: 40}
+      - {id: s1, memory_gb: 40}
+  - id: extra
+    gpus:
+      - {id: p0, memory_gb: 40}
+      - {id: p1, memory_gb: 40}
+queues:
+  - id: training
+    parent: root
+    guaranteed: {gpu_units: 4}
+    limit: {gpu_units: 4}
+jobs:
+  - id: fleet-training
+    queue: training
+    arrival_time: 0
+    duration: 10
+    gpu_count: 4
+    gpu_memory_gb: 20
+    type: training
+    gang: true
+    restart_cost: 1

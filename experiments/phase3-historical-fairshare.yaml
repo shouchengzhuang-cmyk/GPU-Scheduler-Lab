@@ -1,0 +1,9 @@
+experiment:
+  name: phase3-historical-fairshare
+workload:
+  type: scenario
+  scenario: scenarios/historical-fairshare.yaml
+schedulers: [drf, historical-drf]
+seeds: [1]
+output:
+  directory: experiment-results/phase3-historical-fairshare

@@ -1,0 +1,49 @@
+metadata:
+  name: multi-tenant-borrow-reclaim
+nodes:
+  - id: node-a
+    topology: {zone: z1, rack: r1}
+    gpus:
+      - {id: a0, model: A100-80GB, memory_gb: 80}
+      - {id: a1, model: A100-80GB, memory_gb: 80}
+  - id: node-b
+    topology: {zone: z1, rack: r1}
+    gpus:
+      - {id: b0, model: A100-80GB, memory_gb: 80}
+      - {id: b1, model: A100-80GB, memory_gb: 80}
+queues:
+  - id: research
+    parent: root
+    guaranteed: {gpu_units: 2}
+    limit: {gpu_units: 4}
+    borrowing_enabled: true
+    reclaimable: true
+  - id: product
+    parent: root
+    guaranteed: {gpu_units: 2}
+    limit: {gpu_units: 4}
+    borrowing_enabled: true
+    reclaimable: true
+admission: {mode: quota-aware}
+fairshare: {half_life: 20, starvation_threshold: 30}
+jobs:
+  - id: research-borrower
+    queue: research
+    arrival_time: 0
+    duration: 20
+    gpu_count: 4
+    gpu_memory_gb: 40
+    priority: low
+    type: training
+    gang: true
+    checkpoint_cost: 1
+    restart_cost: 1
+  - id: product-guarantee
+    queue: product
+    arrival_time: 2
+    duration: 5
+    gpu_count: 2
+    gpu_memory_gb: 40
+    priority: normal
+    type: inference
+    gang: true

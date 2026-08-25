@@ -15,6 +15,13 @@ DEFAULT_METRICS = (
     "jains_fairness_index",
     "average_topology_distance",
     "preemption_overhead_ratio",
+    "average_queue_wait_time",
+    "queue_service_jains_index",
+    "guarantee_satisfaction_variance",
+    "starvation_count",
+    "elastic_scale_up_count",
+    "elastic_scale_down_count",
+    "recovery_overhead",
 )
 
 

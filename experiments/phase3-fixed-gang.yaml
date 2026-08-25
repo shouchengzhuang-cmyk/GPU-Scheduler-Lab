@@ -1,0 +1,9 @@
+experiment:
+  name: phase3-fixed-gang
+workload:
+  type: scenario
+  scenario: scenarios/fixed-gang-changing-capacity.yaml
+schedulers: [historical-drf]
+seeds: [1]
+output:
+  directory: experiment-results/phase3-fixed-gang

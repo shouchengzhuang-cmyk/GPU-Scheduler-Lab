@@ -1,0 +1,9 @@
+experiment:
+  name: phase3-stable-fleet
+workload:
+  type: scenario
+  scenario: scenarios/stable-fleet.yaml
+schedulers: [historical-drf]
+seeds: [1]
+output:
+  directory: experiment-results/phase3-stable-fleet

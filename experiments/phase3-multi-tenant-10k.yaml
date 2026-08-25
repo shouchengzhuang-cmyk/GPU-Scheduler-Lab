@@ -1,0 +1,23 @@
+experiment:
+  name: phase3-multi-tenant-10k
+workload:
+  type: synthetic
+  tenant_count: 32
+  generator:
+    profile: mixed
+    job_count: 10000
+    node_count: 100
+    gpus_per_node: 8
+    arrival_rate: 1.5
+    median_duration: 120
+allocation_policy:
+  type: historical-drf
+  half_life: 300
+placement_scheduler:
+  type: binpack
+queue_policy:
+  borrowing: true
+  reclaim: false
+seeds: [20260826]
+output:
+  directory: experiment-results/phase3-multi-tenant-10k

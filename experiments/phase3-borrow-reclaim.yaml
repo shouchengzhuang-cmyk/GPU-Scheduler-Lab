@@ -1,0 +1,9 @@
+experiment:
+  name: phase3-borrow-reclaim
+workload:
+  type: scenario
+  scenario: scenarios/multi-tenant-borrow-reclaim.yaml
+schedulers: [fairshare-borrow, fairshare-reclaim]
+seeds: [1]
+output:
+  directory: experiment-results/phase3-borrow-reclaim
