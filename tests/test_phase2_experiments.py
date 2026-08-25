@@ -73,10 +73,55 @@ def test_experiment_writes_manifest_runs_summary_and_chart(tmp_path: Path) -> No
     )
     manifest = json.loads(artifacts.manifest.read_text(encoding="utf-8"))
     assert manifest["name"] == "fixture"
+    assert manifest["elastic_model_version"] == "ideal-linear-v1"
+    assert len(manifest["queue_config_hash"]) == 64
+    assert len(manifest["fleet_event_hash"]) == 64
     assert len(manifest["runs"]) == 2
     assert len({run["scenario_hash"] for run in manifest["runs"]}) == 1
     with artifacts.summary_csv.open(encoding="utf-8", newline="") as handle:
         assert list(csv.DictReader(handle))
+
+
+def test_phase3_experiment_writes_strict_metrics_and_timelines(tmp_path: Path) -> None:
+    output = tmp_path / "phase3"
+    config = tmp_path / "phase3.yaml"
+    scenario = Path(__file__).resolve().parents[1] / "scenarios/multi-tenant-borrow-reclaim.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "experiment:",
+                "  name: phase3-fixture",
+                "workload:",
+                "  type: scenario",
+                f"  scenario: {scenario.as_posix()}",
+                "allocation_policy:",
+                "  type: historical-drf",
+                "  half_life: 20",
+                "placement_scheduler: {type: topology}",
+                "queue_policy: {borrowing: true, reclaim: true}",
+                "seeds: [1]",
+                "output:",
+                f"  directory: {output.as_posix()}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    artifacts = run_experiment(config)
+    json.loads(
+        artifacts.runs.read_text(encoding="utf-8"),
+        parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+    )
+    manifest = json.loads(artifacts.manifest.read_text(encoding="utf-8"))
+    assert manifest["allocation_policy"]["type"] == "historical-drf"
+    for name in (
+        "queue-share-timeline.png",
+        "borrowed-capacity-timeline.png",
+        "fairshare-debt-timeline.png",
+        "elastic-replica-timeline.png",
+        "fleet-capacity-timeline.png",
+    ):
+        assert (output / name).stat().st_size > 0
 
 
 def test_synthetic_multi_seed_experiment_records_distinct_scenarios(tmp_path: Path) -> None:
