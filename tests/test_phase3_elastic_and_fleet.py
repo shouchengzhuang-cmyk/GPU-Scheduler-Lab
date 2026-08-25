@@ -383,6 +383,45 @@ def test_node_failure_during_checkpoint_keeps_reclaim_reservation_safe() -> None
     assert target.status is JobStatus.COMPLETED
 
 
+def test_drain_invalidates_and_replans_deferred_reclaim_reservation() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": f"n{index}",
+                    "gpus": [{"id": f"g{index}", "memory_gb": 40}],
+                }
+                for index in range(3)
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job("r0", 0, 10, 1, 20, queue_id="research", checkpoint_cost=2),
+            Job("r1", 0, 10, 1, 20, queue_id="research", checkpoint_cost=2),
+            Job("target", 1, 1, 2, 20, queue_id="product", gang=True),
+        ],
+        queues=(
+            QueueSpec("research", "root", limit=ResourceVector(3, 120)),
+            QueueSpec(
+                "product",
+                "root",
+                guaranteed=ResourceVector(2),
+                limit=ResourceVector(2, 80),
+            ),
+        ),
+        fleet_events=(FleetEvent(1.5, FleetEventType.NODE_DRAIN, "n0"),),
+    )
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-reclaim", scenario)
+    ).run()
+    target = next(job for job in result.jobs if job.id == "target")
+    assert target.first_start_time == 3.5
+    assert target.completion_time == 4.5
+    assert all(job.status is JobStatus.COMPLETED for job in result.jobs)
+
+
 def test_node_failure_during_restart_invalidates_old_restart_event() -> None:
     cluster = Cluster.from_dict(
         {

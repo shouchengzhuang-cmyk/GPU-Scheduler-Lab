@@ -88,6 +88,57 @@ def test_no_borrow_honors_only_configured_guarantee_dimensions() -> None:
     )
 
 
+def test_no_borrow_allows_descendant_to_use_parent_guarantee() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": "g0", "memory_gb": 40}],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [Job("child-job", 0, 1, 1, 20, queue_id="team/child")],
+        queues=(
+            QueueSpec.from_dict(
+                {
+                    "id": "team",
+                    "parent": "root",
+                    "guaranteed": {"gpu_units": 1},
+                    "limit": {"gpu_units": 1},
+                }
+            ),
+            QueueSpec.from_dict(
+                {
+                    "id": "team/child",
+                    "parent": "team",
+                    "limit": {"gpu_units": 1},
+                }
+            ),
+        ),
+    )
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-no-borrow", scenario)
+    ).run()
+    assert result.jobs[0].completion_time == 1
+
+    nested = QueueHierarchy(
+        [
+            QueueSpec("parent", "root", guaranteed=ResourceVector(1), limit=ResourceVector(2, 80)),
+            QueueSpec(
+                "parent/child",
+                "parent",
+                guaranteed=ResourceVector(2),
+                limit=ResourceVector(2, 80),
+            ),
+        ]
+    )
+    assert not nested.can_allocate("parent/child", ResourceVector(2, 40), {}, borrowing=False)
+
+
 def test_weighted_drf_is_finite_and_weight_adjusted() -> None:
     capacity = ResourceVector(8, 320)
     usage = ResourceVector(4, 80)
@@ -118,6 +169,31 @@ def test_selected_gpu_model_cannot_exceed_queue_limit() -> None:
     scheduler.prepare(0, cluster, [job], [])
     assert scheduler.placement.place(cluster, job) == ["heavy"]
     assert scheduler.place(cluster, job) is None
+
+
+def test_quota_admission_sums_cheapest_feasible_gpu_weights() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [
+                        {"id": "light", "model": "L", "memory_gb": 40},
+                        {"id": "heavy", "model": "H", "memory_gb": 40},
+                    ],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [Job("gang", 0, 1, 2, 20, queue_id="tenant", gang=True)],
+        queues=(QueueSpec("tenant", "root", limit=ResourceVector(2, 80)),),
+        accounting=AccountingPolicy({"L": 1, "H": 2}),
+        admission_mode="quota-aware",
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("fairshare-borrow", scenario)).run()
+    assert result.jobs[0].rejection_reason == "queue_hard_limit"
 
 
 def test_borrowing_and_reclaim_restore_guarantee() -> None:

@@ -49,7 +49,7 @@ class AdmissionController:
         if len(compatible) < minimum:
             return AdmissionDecision(False, "impossible_gpu_request")
         if self.mode is AdmissionMode.QUOTA_AWARE:
-            demand = self.accounting.demand(job, self.cluster, minimum)
+            demand = self.accounting.minimum_demand(job, compatible, minimum)
             for ancestor_id in self.hierarchy.ancestors(job.queue_id):
                 limit = self.hierarchy.specs[ancestor_id].limit
                 if not demand.fits_within(limit):

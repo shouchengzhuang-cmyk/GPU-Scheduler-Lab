@@ -91,23 +91,32 @@ class QueueHierarchy:
             projected = aggregate[ancestor_id] + demand
             if not projected.fits_within(spec.limit):
                 return False
-        queue = self.specs[queue_id]
-        projected_queue = aggregate[queue_id] + demand
-        dimensions = queue.guaranteed_dimensions or frozenset()
-        within_guarantee = (
-            (
-                "gpu_units" not in dimensions
-                or projected_queue.gpu_units <= queue.guaranteed.gpu_units + 1e-9
+        guaranteed_ancestors = [
+            ancestor_id
+            for ancestor_id in self.ancestors(queue_id)
+            if self.specs[ancestor_id].guaranteed_dimensions
+        ]
+        if guaranteed_ancestors and all(
+            self._fits_guarantee(
+                self.specs[ancestor_id],
+                aggregate[ancestor_id] + demand,
             )
+            for ancestor_id in guaranteed_ancestors
+        ):
+            return True
+        queue = self.specs[queue_id]
+        return borrowing and queue.borrowing_enabled
+
+    @staticmethod
+    def _fits_guarantee(spec: QueueSpec, usage: ResourceVector) -> bool:
+        dimensions = spec.guaranteed_dimensions or frozenset()
+        return bool(dimensions) and (
+            ("gpu_units" not in dimensions or usage.gpu_units <= spec.guaranteed.gpu_units + 1e-9)
             and (
                 "gpu_memory_gb" not in dimensions
-                or projected_queue.gpu_memory_gb <= queue.guaranteed.gpu_memory_gb + 1e-9
+                or usage.gpu_memory_gb <= spec.guaranteed.gpu_memory_gb + 1e-9
             )
-            and bool(dimensions)
         )
-        if within_guarantee:
-            return True
-        return borrowing and queue.borrowing_enabled
 
     def leaves(self) -> tuple[str, ...]:
         return tuple(sorted(queue_id for queue_id in self.specs if not self.children[queue_id]))

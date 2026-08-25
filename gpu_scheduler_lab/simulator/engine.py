@@ -666,6 +666,18 @@ class Simulator:
                 self.pending.append(victim)
                 self._schedule_aging_tick(victim, now)
 
+    def _invalidate_reservations_for_node(self, node_id: str, now: float) -> None:
+        node_gpu_ids = {
+            gpu.id for node in self.cluster.nodes if node.id == node_id for gpu in node.gpus
+        }
+        affected_targets = sorted(
+            target_id
+            for target_id, gpu_ids in self._preemption_reserved_gpus.items()
+            if gpu_ids.intersection(node_gpu_ids)
+        )
+        for target_id in affected_targets:
+            self._release_preemption_reservation(target_id, now)
+
     def _record_topology_placement(
         self, job: Job, gpu_ids: tuple[str, ...], node_ids: tuple[str, ...]
     ) -> None:
@@ -716,10 +728,12 @@ class Simulator:
         elif event.event_type is EventType.NODE_DRAIN:
             node.schedulable = False
             node.draining = True
+            self._invalidate_reservations_for_node(node.id, now)
         elif event.event_type in {EventType.NODE_FAIL, EventType.CAPACITY_REVOKE}:
             node.schedulable = False
             node.draining = False
             node.available = False
+            self._invalidate_reservations_for_node(node.id, now)
             self._capacity_loss(node.id, now, event.event_type)
         elif event.event_type in {
             EventType.NODE_RECOVER,
