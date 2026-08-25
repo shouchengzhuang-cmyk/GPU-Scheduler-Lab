@@ -1,0 +1,129 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import IntEnum, StrEnum
+from typing import Any
+
+
+class Priority(IntEnum):
+    LOW = 0
+    NORMAL = 1
+    HIGH = 2
+    CRITICAL = 3
+
+    @classmethod
+    def parse(cls, value: str | Priority) -> Priority:
+        if isinstance(value, Priority):
+            return value
+        try:
+            return cls[value.upper()]
+        except KeyError as exc:
+            raise ValueError(f"unknown priority: {value}") from exc
+
+
+class JobType(StrEnum):
+    INFERENCE = "inference"
+    TRAINING = "training"
+
+
+class JobStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+
+
+@dataclass(slots=True)
+class Job:
+    id: str
+    arrival_time: float
+    duration: float
+    gpu_count: int
+    gpu_memory_gb: float
+    priority: Priority = Priority.NORMAL
+    job_type: JobType = JobType.INFERENCE
+    gang: bool = False
+    sla_deadline: float | None = None
+    group: str | None = None
+    status: JobStatus = field(default=JobStatus.PENDING, init=False)
+    allocated_gpu_ids: list[str] = field(default_factory=list, init=False)
+    accumulated_runtime: float = field(default=0.0, init=False)
+    last_start_time: float | None = field(default=None, init=False)
+    first_start_time: float | None = field(default=None, init=False)
+    completion_time: float | None = field(default=None, init=False)
+    preemption_count: int = field(default=0, init=False)
+    run_generation: int = field(default=0, init=False)
+    running_priority: int | None = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        self.priority = Priority.parse(self.priority)
+        if isinstance(self.job_type, str):
+            self.job_type = JobType(self.job_type)
+        if not self.id:
+            raise ValueError("job id must not be empty")
+        if self.arrival_time < 0:
+            raise ValueError("arrival_time must be non-negative")
+        if self.duration <= 0:
+            raise ValueError("duration must be positive")
+        if self.gpu_count <= 0:
+            raise ValueError("gpu_count must be positive")
+        if self.gpu_memory_gb <= 0:
+            raise ValueError("gpu_memory_gb must be positive")
+        if self.sla_deadline is not None and self.sla_deadline < self.arrival_time:
+            raise ValueError("sla_deadline must not precede arrival_time")
+
+    @property
+    def remaining_duration(self) -> float:
+        return max(0.0, self.duration - self.accumulated_runtime)
+
+    @property
+    def waiting_time(self) -> float | None:
+        if self.completion_time is None:
+            return None
+        return max(0.0, self.completion_time - self.arrival_time - self.duration)
+
+    @property
+    def turnaround_time(self) -> float | None:
+        if self.completion_time is None:
+            return None
+        return self.completion_time - self.arrival_time
+
+    def effective_priority(self, now: float, aging_interval: float) -> int:
+        if self.status is JobStatus.RUNNING:
+            return (
+                self.running_priority if self.running_priority is not None else int(self.priority)
+            )
+        if aging_interval <= 0:
+            return int(self.priority)
+        waited = max(0.0, now - self.arrival_time - self.accumulated_runtime)
+        return min(int(Priority.CRITICAL), int(self.priority) + int(waited // aging_interval))
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Job:
+        return cls(
+            id=str(data["id"]),
+            arrival_time=float(data["arrival_time"]),
+            duration=float(data["duration"]),
+            gpu_count=int(data["gpu_count"]),
+            gpu_memory_gb=float(data["gpu_memory_gb"]),
+            priority=Priority.parse(str(data.get("priority", "normal"))),
+            job_type=JobType(str(data.get("type", "inference"))),
+            gang=bool(data.get("gang", False)),
+            sla_deadline=(
+                float(data["sla_deadline"]) if data.get("sla_deadline") is not None else None
+            ),
+            group=str(data["group"]) if data.get("group") is not None else None,
+        )
+
+    def clone(self) -> Job:
+        return Job(
+            id=self.id,
+            arrival_time=self.arrival_time,
+            duration=self.duration,
+            gpu_count=self.gpu_count,
+            gpu_memory_gb=self.gpu_memory_gb,
+            priority=self.priority,
+            job_type=self.job_type,
+            gang=self.gang,
+            sla_deadline=self.sla_deadline,
+            group=self.group,
+        )

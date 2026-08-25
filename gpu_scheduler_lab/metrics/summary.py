@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+from collections import defaultdict
+from collections.abc import Sequence
+from statistics import mean, median
+from typing import Any
+
+from gpu_scheduler_lab.metrics.fairness import jains_fairness_index
+from gpu_scheduler_lab.metrics.latency import percentile
+from gpu_scheduler_lab.models.job import Job, JobStatus
+
+
+def build_metrics(
+    jobs: Sequence[Job],
+    *,
+    horizon: float,
+    total_gpus: int,
+    busy_gpu_time: float,
+    memory_area: float,
+    total_memory_gb: float,
+    node_area: float,
+    node_count: int,
+    count_fragmentation_area: float,
+    memory_fragmentation_area: float,
+    peak_gpu_utilization: float,
+    scheduling_attempts: int,
+    failed_attempts: int,
+    cross_node_gang_placements: int,
+) -> dict[str, Any]:
+    completed = [job for job in jobs if job.status is JobStatus.COMPLETED]
+    waits = [value for job in completed if (value := job.waiting_time) is not None]
+    turnarounds = [value for job in completed if (value := job.turnaround_time) is not None]
+    sla_jobs = [job for job in jobs if job.sla_deadline is not None]
+    sla_violations = sum(
+        job.completion_time is None or job.completion_time > job.sla_deadline  # type: ignore[operator]
+        for job in sla_jobs
+    )
+    preemptions = sum(job.preemption_count for job in jobs)
+
+    demand_by_group: dict[str, float] = defaultdict(float)
+    served_by_group: dict[str, float] = defaultdict(float)
+    for job in jobs:
+        group = job.group or job.priority.name.lower()
+        demand_by_group[group] += job.duration * job.gpu_count
+        if job.status is JobStatus.COMPLETED:
+            served_by_group[group] += job.duration * job.gpu_count
+    service_ratios = [
+        served_by_group[group] / demand for group, demand in sorted(demand_by_group.items())
+    ]
+
+    gpu_capacity_time = total_gpus * horizon
+    memory_capacity_time = total_memory_gb * horizon
+    node_capacity_time = node_count * horizon
+    average_gpu_utilization = busy_gpu_time / gpu_capacity_time if gpu_capacity_time else 0.0
+    return {
+        "average_gpu_utilization": average_gpu_utilization,
+        "peak_gpu_utilization": peak_gpu_utilization,
+        "gpu_memory_utilization": memory_area / memory_capacity_time
+        if memory_capacity_time
+        else 0.0,
+        "gpu_count_fragmentation": count_fragmentation_area / horizon if horizon else 0.0,
+        "gpu_memory_fragmentation": memory_fragmentation_area / horizon if horizon else 0.0,
+        "gpu_fragmentation_ratio": (
+            (count_fragmentation_area + memory_fragmentation_area) / (2.0 * horizon)
+            if horizon
+            else 0.0
+        ),
+        "node_utilization": node_area / node_capacity_time if node_capacity_time else 0.0,
+        "idle_gpu_time": max(0.0, gpu_capacity_time - busy_gpu_time),
+        "average_waiting_time": mean(waits) if waits else 0.0,
+        "median_waiting_time": median(waits) if waits else 0.0,
+        "p95_waiting_time": percentile(waits, 0.95),
+        "average_turnaround_time": mean(turnarounds) if turnarounds else 0.0,
+        "p95_turnaround_time": percentile(turnarounds, 0.95),
+        "completion_rate": len(completed) / len(jobs) if jobs else 1.0,
+        "completed_jobs": len(completed),
+        "total_jobs": len(jobs),
+        "preemption_count": preemptions,
+        "average_preemptions_per_job": preemptions / len(jobs) if jobs else 0.0,
+        "sla_violation_count": sla_violations,
+        "sla_violation_rate": sla_violations / len(sla_jobs) if sla_jobs else 0.0,
+        "sla_job_count": len(sla_jobs),
+        "cross_node_gang_placement_count": cross_node_gang_placements,
+        "scheduling_attempt_count": scheduling_attempts,
+        "failed_placement_attempt_count": failed_attempts,
+        "jains_fairness_index": jains_fairness_index(service_ratios),
+        "fairness_groups": {
+            group: {
+                "demand_gpu_time": demand,
+                "served_gpu_time": served_by_group[group],
+                "service_ratio": served_by_group[group] / demand,
+            }
+            for group, demand in sorted(demand_by_group.items())
+        },
+        "simulation_horizon": horizon,
+        "busy_gpu_time": busy_gpu_time,
+    }

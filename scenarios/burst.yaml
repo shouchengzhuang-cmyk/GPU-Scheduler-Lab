@@ -1,0 +1,15 @@
+metadata:
+  description: Short inference burst with a long low-priority background job
+  seed: 20260825
+nodes:
+  - id: burst-a
+    gpus: [{memory_gb: 24}, {memory_gb: 24}, {memory_gb: 24}, {memory_gb: 24}]
+  - id: burst-b
+    gpus: [{memory_gb: 24}, {memory_gb: 24}, {memory_gb: 24}, {memory_gb: 24}]
+jobs:
+  - {id: background, arrival_time: 0, duration: 120, gpu_count: 8, gpu_memory_gb: 20, priority: low, type: training, gang: true}
+  - {id: burst-01, arrival_time: 5, duration: 7, gpu_count: 1, gpu_memory_gb: 12, priority: high, type: inference, gang: false, sla_deadline: 20}
+  - {id: burst-02, arrival_time: 5, duration: 8, gpu_count: 1, gpu_memory_gb: 12, priority: critical, type: inference, gang: false, sla_deadline: 20}
+  - {id: burst-03, arrival_time: 5, duration: 6, gpu_count: 2, gpu_memory_gb: 12, priority: high, type: inference, gang: true, sla_deadline: 20}
+  - {id: burst-04, arrival_time: 6, duration: 5, gpu_count: 1, gpu_memory_gb: 12, priority: normal, type: inference, gang: false, sla_deadline: 25}
+  - {id: burst-05, arrival_time: 6, duration: 9, gpu_count: 2, gpu_memory_gb: 12, priority: high, type: inference, gang: true, sla_deadline: 25}
