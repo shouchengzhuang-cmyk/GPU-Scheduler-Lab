@@ -307,6 +307,27 @@ def test_join_drain_fail_and_recover_have_explicit_semantics() -> None:
     assert result.metrics["node_failure_count"] == 1
 
 
+def test_draining_running_node_counts_as_utilized_active_capacity() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": "g0", "memory_gb": 40}],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [Job("job", 0, 5, 1, 20, queue_id="tenant")],
+        queues=(QueueSpec("tenant", "root", limit=ResourceVector(1, 40)),),
+        fleet_events=(FleetEvent(1, FleetEventType.NODE_DRAIN, "node"),),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("historical-drf", scenario)).run()
+    assert result.metrics["node_utilization"] == pytest.approx(1.0)
+
+
 def test_new_phase3_numeric_fields_reject_nan_and_inf() -> None:
     with pytest.raises(ValueError, match="finite"):
         QueueSpec("tenant", "root", weight=float("inf"))

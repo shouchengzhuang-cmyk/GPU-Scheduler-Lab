@@ -158,6 +158,35 @@ def test_no_borrow_allows_descendant_to_use_parent_guarantee() -> None:
     )
 
 
+def test_pending_order_prioritizes_descendant_parent_entitlement() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "node",
+                    "gpus": [{"id": "g0", "memory_gb": 40}],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job("a-borrower", 0, 10, 1, 20, queue_id="borrower"),
+            Job("z-entitled", 0, 1, 1, 20, queue_id="team/child"),
+        ],
+        queues=(
+            QueueSpec("borrower", "root", limit=ResourceVector(1, 40)),
+            QueueSpec("team", "root", guaranteed=ResourceVector(1), limit=ResourceVector(1, 40)),
+            QueueSpec("team/child", "team", limit=ResourceVector(1, 40)),
+        ),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("fairshare-borrow", scenario)).run()
+    borrower, entitled = result.jobs
+    assert entitled.first_start_time == 0
+    assert borrower.first_start_time == 1
+
+
 def test_weighted_drf_is_finite_and_weight_adjusted() -> None:
     capacity = ResourceVector(8, 320)
     usage = ResourceVector(4, 80)
@@ -252,6 +281,50 @@ def test_admission_rejects_topologically_impossible_minimum(
     )
     result = Simulator.from_scenario(scenario, create_scheduler("fairshare-borrow", scenario)).run()
     assert result.jobs[0].rejection_reason == "impossible_gpu_request"
+
+
+def test_quota_admission_uses_cheapest_topology_feasible_gpu_set() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "cheap-a",
+                    "gpus": [{"id": "l0", "model": "L", "memory_gb": 40}],
+                },
+                {
+                    "id": "cheap-b",
+                    "gpus": [{"id": "l1", "model": "L", "memory_gb": 40}],
+                },
+                {
+                    "id": "heavy",
+                    "gpus": [
+                        {"id": "h0", "model": "H", "memory_gb": 40},
+                        {"id": "h1", "model": "H", "memory_gb": 40},
+                    ],
+                },
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            Job(
+                "gang",
+                0,
+                1,
+                2,
+                20,
+                queue_id="tenant",
+                gang=True,
+                topology_mode=TopologyMode.REQUIRE_SAME_NODE,
+            )
+        ],
+        queues=(QueueSpec("tenant", "root", limit=ResourceVector(2, 80)),),
+        accounting=AccountingPolicy({"L": 1, "H": 2}),
+        admission_mode="quota-aware",
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("fairshare-borrow", scenario)).run()
+    assert result.jobs[0].rejection_reason == "queue_hard_limit"
 
 
 def test_borrowing_and_reclaim_restore_guarantee() -> None:
@@ -427,6 +500,27 @@ def test_admission_rejects_permanently_cordoned_only_capacity() -> None:
                 {
                     "id": "cordoned",
                     "schedulable": False,
+                    "gpus": [{"id": "g0", "memory_gb": 40}],
+                }
+            ]
+        }
+    )
+    scenario = Scenario(
+        cluster,
+        [Job("job", 0, 1, 1, 20, queue_id="tenant")],
+        queues=(QueueSpec("tenant", "root", limit=ResourceVector(1, 40)),),
+    )
+    result = Simulator.from_scenario(scenario, create_scheduler("historical-drf", scenario)).run()
+    assert result.jobs[0].rejection_reason == "impossible_gpu_request"
+
+
+def test_admission_rejects_unavailable_capacity_without_future_return() -> None:
+    cluster = Cluster.from_dict(
+        {
+            "nodes": [
+                {
+                    "id": "failed",
+                    "available": False,
                     "gpus": [{"id": "g0", "memory_gb": 40}],
                 }
             ]

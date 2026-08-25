@@ -1147,7 +1147,7 @@ class Simulator:
         busy = sum(gpu.occupied for gpu in self.cluster.active_gpus)
         allocated_memory = sum(gpu.allocated_memory_gb for gpu in self.cluster.active_gpus)
         active_nodes = sum(
-            any(gpu.occupied for gpu in node.gpus) for node in self.cluster.schedulable_nodes
+            any(gpu.occupied for gpu in node.gpus) for node in self.cluster.active_nodes
         )
         count_fragmentation, memory_fragmentation, _ = fragmentation_snapshot(self.cluster)
         self._busy_gpu_time += busy * delta

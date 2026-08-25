@@ -102,10 +102,7 @@ class FairShareScheduler(Scheduler):
         spec = self.hierarchy.specs[job.queue_id]
         usage = self._aggregate_usage.get(job.queue_id, ResourceVector())
         capacity = self._capacity
-        guarantee_deficit = (
-            usage.gpu_units + 1e-9 < spec.guaranteed.gpu_units
-            or usage.gpu_memory_gb + 1e-9 < spec.guaranteed.gpu_memory_gb
-        )
+        guarantee_deficit = self._has_guarantee_deficit(job.queue_id)
         dominant = weighted_dominant_share(usage, capacity, spec.weight)
         debt = self._debts.get(job.queue_id, 0.0) if self.historical else 0.0
         return (
