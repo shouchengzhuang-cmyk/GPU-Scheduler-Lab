@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from typing import Any
@@ -75,6 +76,18 @@ class Job:
         self.allowed_gpu_models = tuple(self.allowed_gpu_models)
         if not self.id:
             raise ValueError("job id must not be empty")
+        finite_values = {
+            "arrival_time": self.arrival_time,
+            "duration": self.duration,
+            "gpu_memory_gb": self.gpu_memory_gb,
+            "checkpoint_cost": self.checkpoint_cost,
+            "restart_cost": self.restart_cost,
+        }
+        if self.sla_deadline is not None:
+            finite_values["sla_deadline"] = self.sla_deadline
+        for name, value in finite_values.items():
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
         if self.arrival_time < 0:
             raise ValueError("arrival_time must be non-negative")
         if self.duration <= 0:

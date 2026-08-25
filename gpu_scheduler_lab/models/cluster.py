@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -19,8 +20,10 @@ class GPU:
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("gpu id must not be empty")
-        if self.memory_capacity_gb <= 0:
+        if not math.isfinite(self.memory_capacity_gb) or self.memory_capacity_gb <= 0:
             raise ValueError("GPU memory capacity must be positive")
+        if not math.isfinite(self.allocated_memory_gb) or self.allocated_memory_gb < 0:
+            raise ValueError("allocated GPU memory must be finite and non-negative")
         if not self.model:
             raise ValueError("GPU model must not be empty")
 

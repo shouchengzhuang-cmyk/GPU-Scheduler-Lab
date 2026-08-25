@@ -50,6 +50,29 @@ def test_gpu_model_compatibility_is_centralized() -> None:
     assert not gpu.can_host(Job("memory", 0, 1, 1, 90, gpu_model="A100"))
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("checkpoint_cost", float("nan")),
+        ("checkpoint_cost", float("inf")),
+        ("restart_cost", float("nan")),
+        ("restart_cost", float("inf")),
+    ],
+)
+def test_job_rejects_non_finite_preemption_cost(field: str, value: float) -> None:
+    with pytest.raises(ValueError, match=f"{field} must be finite"):
+        if field == "checkpoint_cost":
+            Job("job", 0, 1, 1, 1, checkpoint_cost=value)
+        else:
+            Job("job", 0, 1, 1, 1, restart_cost=value)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_gpu_rejects_non_finite_memory_capacity(value: float) -> None:
+    with pytest.raises(ValueError, match="memory capacity must be positive"):
+        GPU("gpu", "node", value)
+
+
 def test_unschedulable_node_rejects_otherwise_compatible_gpu() -> None:
     cluster = make_cluster([[80]])
     cluster.nodes[0].schedulable = False
