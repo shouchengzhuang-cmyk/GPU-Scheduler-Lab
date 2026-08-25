@@ -53,6 +53,9 @@ class Node:
     gpus: list[GPU]
     schedulable: bool = True
     topology: dict[str, str] = field(default_factory=dict)
+    revocable: bool = False
+    draining: bool = False
+    available: bool = True
 
     @property
     def occupied_gpu_count(self) -> int:
@@ -66,6 +69,7 @@ class Node:
 @dataclass(slots=True)
 class Cluster:
     nodes: list[Node]
+    _gpu_index: dict[str, GPU] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         node_ids = [node.id for node in self.nodes]
@@ -74,6 +78,7 @@ class Cluster:
             raise ValueError("node ids must be unique")
         if len(set(gpu_ids)) != len(gpu_ids):
             raise ValueError("GPU ids must be unique")
+        self._gpu_index = {gpu.id: gpu for node in self.nodes for gpu in node.gpus}
         for node in self.nodes:
             if any(gpu.node_id != node.id for gpu in node.gpus):
                 raise ValueError(f"GPU node_id must match containing node {node.id}")
@@ -84,7 +89,18 @@ class Cluster:
 
     @property
     def schedulable_nodes(self) -> list[Node]:
-        return [node for node in self.nodes if node.schedulable]
+        return [node for node in self.nodes if node.schedulable and node.available]
+
+    @property
+    def active_nodes(self) -> list[Node]:
+        """Capacity that exists now, including draining nodes with running work."""
+        return [
+            node for node in self.nodes if node.available and (node.schedulable or node.draining)
+        ]
+
+    @property
+    def active_gpus(self) -> list[GPU]:
+        return [gpu for node in self.active_nodes for gpu in node.gpus]
 
     @property
     def schedulable_gpus(self) -> list[GPU]:
@@ -109,10 +125,10 @@ class Cluster:
         return sum(gpu.memory_capacity_gb for gpu in self.schedulable_gpus)
 
     def gpu_by_id(self, gpu_id: str) -> GPU:
-        for gpu in self.gpus:
-            if gpu.id == gpu_id:
-                return gpu
-        raise KeyError(gpu_id)
+        try:
+            return self._gpu_index[gpu_id]
+        except KeyError as exc:
+            raise KeyError(gpu_id) from exc
 
     def eligible_gpus(self, request: Job | float) -> list[GPU]:
         return [
@@ -121,7 +137,9 @@ class Cluster:
 
     def allocate(self, job: Job, gpu_ids: Iterable[str]) -> None:
         selected_ids = list(gpu_ids)
-        if len(selected_ids) != job.gpu_count or len(set(selected_ids)) != len(selected_ids):
+        if len(selected_ids) != job.requested_gpu_count or len(set(selected_ids)) != len(
+            selected_ids
+        ):
             raise ValueError("placement must contain exactly the requested number of unique GPUs")
         selected = [self.gpu_by_id(gpu_id) for gpu_id in selected_ids]
         schedulable_ids = {gpu.id for gpu in self.schedulable_gpus}
@@ -147,6 +165,27 @@ class Cluster:
             gpu.allocated_memory_gb = 0.0
         job.allocated_gpu_ids.clear()
 
+    def resize(self, job: Job, gpu_ids: Iterable[str]) -> None:
+        target = list(gpu_ids)
+        if len(set(target)) != len(target):
+            raise ValueError("resize placement must contain unique GPUs")
+        current = set(job.allocated_gpu_ids)
+        target_set = set(target)
+        for gpu_id in sorted(current - target_set):
+            gpu = self.gpu_by_id(gpu_id)
+            if gpu.owner_job_id != job.id:
+                raise RuntimeError(f"GPU ownership mismatch for {gpu.id}")
+            gpu.owner_job_id = None
+            gpu.allocated_memory_gb = 0.0
+        schedulable_ids = {gpu.id for gpu in self.schedulable_gpus}
+        for gpu_id in sorted(target_set - current):
+            gpu = self.gpu_by_id(gpu_id)
+            if gpu_id not in schedulable_ids or not gpu.can_host(job):
+                raise ValueError("resize contains an unavailable or undersized GPU")
+            gpu.owner_job_id = job.id
+            gpu.allocated_memory_gb = job.gpu_memory_gb
+        job.allocated_gpu_ids = target
+
     def assert_invariants(self) -> None:
         seen: set[str] = set()
         for gpu in self.gpus:
@@ -165,6 +204,9 @@ class Cluster:
                     id=node.id,
                     schedulable=node.schedulable,
                     topology=dict(node.topology),
+                    revocable=node.revocable,
+                    draining=node.draining,
+                    available=node.available,
                     gpus=[
                         GPU(
                             id=gpu.id,
@@ -203,6 +245,8 @@ class Cluster:
                     gpus=gpus,
                     schedulable=bool(node_data.get("schedulable", True)),
                     topology={str(k): str(v) for k, v in node_data.get("topology", {}).items()},
+                    revocable=bool(node_data.get("revocable", False)),
+                    available=bool(node_data.get("available", True)),
                 )
             )
         return cls(nodes)

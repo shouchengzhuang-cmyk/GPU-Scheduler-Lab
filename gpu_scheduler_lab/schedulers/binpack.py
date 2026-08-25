@@ -27,7 +27,7 @@ class BinPackScheduler(Scheduler):
         candidates = [
             (node, self._eligible(node, job)) for node in cluster.nodes if node.schedulable
         ]
-        if sum(len(gpus) for _, gpus in candidates) < job.gpu_count:
+        if sum(len(gpus) for _, gpus in candidates) < job.requested_gpu_count:
             return None
 
         # Occupied nodes come first. Among equally loaded nodes, consuming the smaller
@@ -43,8 +43,8 @@ class BinPackScheduler(Scheduler):
         )
         placement: list[str] = []
         for _, gpus in candidates:
-            needed = job.gpu_count - len(placement)
+            needed = job.requested_gpu_count - len(placement)
             placement.extend(gpu.id for gpu in gpus[:needed])
-            if len(placement) == job.gpu_count:
+            if len(placement) == job.requested_gpu_count:
                 return placement
         return None

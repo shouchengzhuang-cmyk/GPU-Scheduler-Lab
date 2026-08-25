@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from typing import Any
 
+from gpu_scheduler_lab.elastic.work import ElasticSpec
 from gpu_scheduler_lab.models.topology import TopologyMode
 
 
@@ -30,6 +31,7 @@ class JobType(StrEnum):
 
 
 class JobStatus(StrEnum):
+    REJECTED = "rejected"
     PENDING = "pending"
     RUNNING = "running"
     CHECKPOINTING = "checkpointing"
@@ -55,6 +57,8 @@ class Job:
     checkpoint_cost: float = 0.0
     restart_cost: float = 0.0
     source_metadata: dict[str, Any] = field(default_factory=dict)
+    queue_id: str = "root/default"
+    elastic: ElasticSpec | None = None
     status: JobStatus = field(default=JobStatus.PENDING, init=False)
     allocated_gpu_ids: list[str] = field(default_factory=list, init=False)
     accumulated_runtime: float = field(default=0.0, init=False)
@@ -66,6 +70,18 @@ class Job:
     running_priority: int | None = field(default=None, init=False)
     checkpoint_overhead: float = field(default=0.0, init=False)
     restart_overhead: float = field(default=0.0, init=False)
+    admission_time: float | None = field(default=None, init=False)
+    rejection_reason: str | None = field(default=None, init=False)
+    productive_work_completed: float = field(default=0.0, init=False)
+    current_replicas: int = field(default=0, init=False)
+    requested_replicas: int = field(default=0, init=False)
+    borrowed_gpu_units: float = field(default=0.0, init=False)
+    reclaim_victim_count: int = field(default=0, init=False)
+    recovery_count: int = field(default=0, init=False)
+    recovery_overhead: float = field(default=0.0, init=False)
+    elastic_scale_up_count: int = field(default=0, init=False)
+    elastic_scale_down_count: int = field(default=0, init=False)
+    resize_churn_count: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
         self.priority = Priority.parse(self.priority)
@@ -76,6 +92,8 @@ class Job:
         self.allowed_gpu_models = tuple(self.allowed_gpu_models)
         if not self.id:
             raise ValueError("job id must not be empty")
+        if not self.queue_id:
+            raise ValueError("queue_id must not be empty")
         finite_values = {
             "arrival_time": self.arrival_time,
             "duration": self.duration,
@@ -106,6 +124,36 @@ class Job:
             raise ValueError("allowed_gpu_models must not contain empty values")
         if self.checkpoint_cost < 0 or self.restart_cost < 0:
             raise ValueError("preemption costs must be non-negative")
+        self.requested_replicas = (
+            self.elastic.preferred_replicas if self.elastic is not None else self.gpu_count
+        )
+
+    @property
+    def minimum_gpu_count(self) -> int:
+        return self.elastic.min_replicas if self.elastic is not None else self.gpu_count
+
+    @property
+    def preferred_gpu_count(self) -> int:
+        return self.elastic.preferred_replicas if self.elastic is not None else self.gpu_count
+
+    @property
+    def maximum_gpu_count(self) -> int:
+        return self.elastic.max_replicas if self.elastic is not None else self.gpu_count
+
+    @property
+    def requested_gpu_count(self) -> int:
+        return self.requested_replicas or self.gpu_count
+
+    @property
+    def total_productive_work(self) -> float:
+        replicas = self.preferred_gpu_count if self.elastic is not None else self.gpu_count
+        return self.duration * replicas
+
+    def productive_rate(self, replicas: int | None = None) -> float:
+        count = self.current_replicas if replicas is None else replicas
+        if self.elastic is None:
+            return float(self.gpu_count)
+        return self.elastic.work_rate(count)
 
     @property
     def remaining_duration(self) -> float:
@@ -115,6 +163,12 @@ class Job:
     def waiting_time(self) -> float | None:
         if self.completion_time is None:
             return None
+        if self.elastic is not None:
+            return (
+                max(0.0, self.first_start_time - self.arrival_time)
+                if self.first_start_time is not None
+                else None
+            )
         return max(0.0, self.completion_time - self.arrival_time - self.duration)
 
     @property
@@ -154,6 +208,8 @@ class Job:
             checkpoint_cost=float(data.get("checkpoint_cost", 0.0)),
             restart_cost=float(data.get("restart_cost", 0.0)),
             source_metadata=dict(data.get("source_metadata", {})),
+            queue_id=str(data.get("queue", "root/default")),
+            elastic=ElasticSpec.from_dict(data.get("elastic")),
         )
 
     def clone(self) -> Job:
@@ -174,4 +230,6 @@ class Job:
             checkpoint_cost=self.checkpoint_cost,
             restart_cost=self.restart_cost,
             source_metadata=dict(self.source_metadata),
+            queue_id=self.queue_id,
+            elastic=self.elastic,
         )

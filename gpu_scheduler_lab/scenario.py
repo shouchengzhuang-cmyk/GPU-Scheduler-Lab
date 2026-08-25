@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from gpu_scheduler_lab.fairshare.accounting import AccountingPolicy
+from gpu_scheduler_lab.fleet.events import FleetEvent
 from gpu_scheduler_lab.models.cluster import Cluster
 from gpu_scheduler_lab.models.job import Job
+from gpu_scheduler_lab.queues.hierarchy import QueueHierarchy
+from gpu_scheduler_lab.queues.model import QueueSpec
 
 
 @dataclass(slots=True)
@@ -15,12 +20,24 @@ class Scenario:
     cluster: Cluster
     jobs: list[Job]
     metadata: dict[str, Any] = field(default_factory=dict)
+    queues: tuple[QueueSpec, ...] = ()
+    accounting: AccountingPolicy = field(default_factory=AccountingPolicy)
+    admission_mode: str = "permissive"
+    fairshare_half_life: float = 300.0
+    starvation_threshold: float = 300.0
+    fleet_events: tuple[FleetEvent, ...] = ()
 
     def clone(self) -> Scenario:
         return Scenario(
             cluster=self.cluster.clone(),
             jobs=[job.clone() for job in self.jobs],
             metadata=dict(self.metadata),
+            queues=self.queues,
+            accounting=self.accounting,
+            admission_mode=self.admission_mode,
+            fairshare_half_life=self.fairshare_half_life,
+            starvation_threshold=self.starvation_threshold,
+            fleet_events=self.fleet_events,
         )
 
 
@@ -31,17 +48,51 @@ def load_scenario(path: Path) -> Scenario:
         raise ValueError("scenario root must be a mapping")
     cluster = Cluster.from_dict(raw)
     jobs = [Job.from_dict(item) for item in raw.get("jobs", [])]
-    return Scenario(cluster=cluster, jobs=jobs, metadata=dict(raw.get("metadata", {})))
+    queues_raw = raw.get("queues", [])
+    if not isinstance(queues_raw, list):
+        raise ValueError("queues must be a list")
+    admission = raw.get("admission", {})
+    fairshare = raw.get("fairshare", {})
+    if not isinstance(admission, dict) or not isinstance(fairshare, dict):
+        raise ValueError("admission and fairshare must be mappings")
+    events_raw = raw.get("fleet_events", [])
+    if not isinstance(events_raw, list):
+        raise ValueError("fleet_events must be a list")
+    fleet_events = tuple(FleetEvent.from_dict(item) for item in events_raw)
+    node_ids = {node.id for node in cluster.nodes}
+    if any(event.node_id not in node_ids for event in fleet_events):
+        raise ValueError("fleet event references an unknown node")
+    queues = tuple(QueueSpec.from_dict(item) for item in queues_raw)
+    QueueHierarchy(queues)
+    half_life = float(fairshare.get("half_life", 300.0))
+    starvation_threshold = float(fairshare.get("starvation_threshold", 300.0))
+    if not math.isfinite(half_life) or half_life <= 0:
+        raise ValueError("fairshare.half_life must be finite and positive")
+    if not math.isfinite(starvation_threshold) or starvation_threshold < 0:
+        raise ValueError("fairshare.starvation_threshold must be finite and non-negative")
+    return Scenario(
+        cluster=cluster,
+        jobs=jobs,
+        metadata=dict(raw.get("metadata", {})),
+        queues=queues,
+        accounting=AccountingPolicy.from_dict(raw.get("accounting")),
+        admission_mode=str(admission.get("mode", "permissive")),
+        fairshare_half_life=half_life,
+        starvation_threshold=starvation_threshold,
+        fleet_events=fleet_events,
+    )
 
 
 def scenario_to_dict(scenario: Scenario) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "metadata": scenario.metadata,
         "nodes": [
             {
                 "id": node.id,
                 "schedulable": node.schedulable,
                 "topology": node.topology,
+                **({"revocable": True} if node.revocable else {}),
+                **({"available": False} if not node.available else {}),
                 "gpus": [
                     {
                         "id": gpu.id,
@@ -79,10 +130,26 @@ def scenario_to_dict(scenario: Scenario) -> dict[str, Any]:
                 **({"checkpoint_cost": job.checkpoint_cost} if job.checkpoint_cost else {}),
                 **({"restart_cost": job.restart_cost} if job.restart_cost else {}),
                 **({"source_metadata": job.source_metadata} if job.source_metadata else {}),
+                **({"queue": job.queue_id} if job.queue_id != "root/default" else {}),
+                **({"elastic": job.elastic.to_dict()} if job.elastic is not None else {}),
             }
             for job in scenario.jobs
         ],
     }
+    if scenario.queues:
+        payload["queues"] = [queue.to_dict() for queue in scenario.queues]
+    if scenario.accounting.model_weights:
+        payload["accounting"] = {"model_weights": scenario.accounting.model_weights}
+    if scenario.admission_mode != "permissive":
+        payload["admission"] = {"mode": scenario.admission_mode}
+    if scenario.fairshare_half_life != 300.0 or scenario.starvation_threshold != 300.0:
+        payload["fairshare"] = {
+            "half_life": scenario.fairshare_half_life,
+            "starvation_threshold": scenario.starvation_threshold,
+        }
+    if scenario.fleet_events:
+        payload["fleet_events"] = [event.to_dict() for event in scenario.fleet_events]
+    return payload
 
 
 def write_scenario(scenario: Scenario, path: Path) -> None:

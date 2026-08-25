@@ -10,6 +10,8 @@ from gpu_scheduler_lab.models.job import Job
 class Scheduler(ABC):
     name = "base"
     supports_preemption = False
+    supports_reclaim = False
+    supports_elastic = False
     aging_interval = 30.0
 
     @abstractmethod
@@ -35,3 +37,12 @@ class Scheduler(ABC):
 
     def metrics(self) -> dict[str, Any]:
         return {}
+
+    def can_reclaim(self, victim: Job, incoming: Job) -> bool:
+        return False
+
+    def can_scale_up(self, job: Job) -> bool:
+        return False
+
+    def can_resize(self, job: Job, replicas: int) -> bool:
+        return False
