@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from gpu_scheduler_lab.cli import main
@@ -45,6 +46,30 @@ def test_custom_workload_distributions_are_honored() -> None:
     assert {job.gpu_count for job in scenario.jobs} == {2}
     assert {job.gpu_memory_gb for job in scenario.jobs} == {18.0}
     assert {job.priority.name for job in scenario.jobs} == {"CRITICAL"}
+
+
+def test_custom_gpu_count_distribution_preserves_cross_node_requests() -> None:
+    scenario = generate_scenario(
+        GeneratorConfig(
+            job_count=4,
+            node_count=8,
+            gpus_per_node=8,
+            training_ratio=1,
+            gpu_count_distribution=((32, 1.0),),
+            seed=10,
+        )
+    )
+
+    assert {job.gpu_count for job in scenario.jobs} == {32}
+
+
+def test_custom_gpu_count_distribution_rejects_oversized_requests() -> None:
+    with pytest.raises(ValueError, match="more GPUs than the cluster contains"):
+        GeneratorConfig(
+            node_count=8,
+            gpus_per_node=8,
+            gpu_count_distribution=((65, 1.0),),
+        )
 
 
 def test_mini_ai_cloud_contract_maps_inventory_and_tasks() -> None:

@@ -63,7 +63,7 @@ uv pip install --python .venv/bin/python -e '.[dev]'
   --seed 42 --output scenarios/fragmentation.generated.yaml
 ```
 
-可用 `--duration-distribution fixed|exponential|lognormal`、`--gpu-count-distribution 1:0.6,2:0.3,4:0.1`、`--gpu-memory-distribution 20:0.7,40:0.3` 和 `--priority-weights low,normal,high,critical` 覆盖 profile 默认分布；arrival rate、duration、training ratio、gang/SLA probability 与 seed 也都是显式参数。
+可用 `--duration-distribution fixed|exponential|lognormal`、`--gpu-count-distribution 1:0.6,2:0.3,4:0.1`、`--gpu-memory-distribution 20:0.7,40:0.3` 和 `--priority-weights low,normal,high,critical` 覆盖 profile 默认分布；arrival rate、duration、training ratio、gang/SLA probability 与 seed 也都是显式参数。自定义 GPU count 会原样保留；任何值超过集群物理 GPU 总数时生成器会明确报错，不会截断 workload。
 
 内置 profile：
 
@@ -109,9 +109,9 @@ Preemptive policy 使用 BinPack placement，pending queue 按有效优先级降
 
 ## Metrics
 
-Cluster metrics 包括平均/峰值 GPU utilization、GPU memory utilization、Node utilization、idle GPU time，以及下述 count/memory fragmentation。Job metrics 包括 wait、turnaround、completion、preemption 和 SLA；Scheduling metrics 包括 placement attempts、failed attempts 和 cross-node gang placement。
+Cluster metrics 包括平均/峰值 GPU utilization、GPU memory utilization、Node utilization、idle GPU time，以及下述 count/memory fragmentation。Job metrics 包括 wait、turnaround、completion、preemption 和 SLA；Scheduling metrics 包括 placement attempts、failed attempts 和 cross-node gang placement。Cluster 同时保留 physical capacity 和 schedulable capacity；MVP 指标默认只用 `schedulable: true` 的 Node/GPU 作为分母，cordoned Node 不产生虚假 idle capacity。
 
-时间平均指标通过逻辑事件间隔积分，不依赖 `time.sleep()` 或真实 wall clock。
+时间平均指标通过逻辑事件间隔积分，不依赖 `time.sleep()` 或真实 wall clock。Aging tick 只负责 starvation protection；当没有 running Job、只剩 aging bookkeeping event 时，它不会延长 workload horizon。
 
 ### GPU count fragmentation
 
@@ -125,7 +125,7 @@ $$
 - 1：所有非空 Node 都恰好半空，Node 内部最零散；
 - 范围：$[0,1]$。
 
-它适合比较 pack/spread 造成的 Node partiality，但不是针对某个具体 pending job 的可调度性证明，也不建模互联拓扑带宽。
+它适合比较 pack/spread 造成的 Node partiality，但不是针对某个具体 pending job 的可调度性证明，也不建模互联拓扑带宽。计算只遍历 schedulable Node，避免 cordoned capacity 稀释结果。
 
 ### GPU memory fragmentation
 
@@ -154,6 +154,7 @@ $$
 ## Reproducibility
 
 - 所有 arrival/completion 都由 `heapq` 驱动的逻辑时钟处理；
+- scheduler 内部 aging-only tick 不进入 material workload horizon；
 - 同一时刻先 completion、后 arrival，再执行 scheduling；
 - placement、pending order 和 victim order 都有稳定决胜字段；
 - synthetic generator 使用局部 `random.Random(seed)`；
@@ -185,10 +186,10 @@ $$
 
 | Scheduler | Simulator elapsed | Completion | Avg GPU util | Avg wait | P95 wait | Fragmentation | SLA violation |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| BinPack | 8.130 s | 1.000 | 0.5520 | 0.035 | 0.000 | 0.2777 | 0.0000 |
-| Spread | 7.409 s | 1.000 | 0.5520 | 0.000 | 0.000 | 0.5594 | 0.0000 |
+| BinPack | 8.832 s | 1.000 | 0.5520 | 0.035 | 0.000 | 0.2777 | 0.0000 |
+| Spread | 8.047 s | 1.000 | 0.5520 | 0.000 | 0.000 | 0.5594 | 0.0000 |
 
-双策略 simulation 段 wall time 为 15.565 s；含 Python 启动、workload 生成和 JSON 写出的完整进程为 15.99 s，峰值 RSS 约 37,580 KiB。原始结果由脚本重新生成，不提交 `results/`。
+双策略 simulation 段 wall time 为 16.905 s；含 Python 启动、workload 生成和 JSON 写出的完整进程为 20.65 s，峰值 RSS 约 37,536 KiB。原始结果由脚本重新生成，不提交 `results/`。
 
 ## Development and CI
 

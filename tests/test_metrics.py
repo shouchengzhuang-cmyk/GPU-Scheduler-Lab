@@ -40,6 +40,18 @@ def test_memory_fragmentation_measures_stranded_memory() -> None:
     assert combined == pytest.approx(0.375)
 
 
+def test_unschedulable_nodes_do_not_dilute_fragmentation() -> None:
+    cluster = make_cluster([[24, 24], [24, 24, 24, 24, 24, 24, 24, 24]])
+    cluster.nodes[1].schedulable = False
+    cluster.allocate(Job("a", 0, 10, 1, 20), ["gpu-0-0"])
+
+    count, memory, combined = fragmentation_snapshot(cluster)
+
+    assert count == 1.0
+    assert memory == pytest.approx(1 - 20 / 24)
+    assert combined == pytest.approx((count + memory) / 2)
+
+
 def test_jains_fairness_index() -> None:
     assert jains_fairness_index([1, 1, 1]) == 1.0
     assert jains_fairness_index([1, 0]) == 0.5

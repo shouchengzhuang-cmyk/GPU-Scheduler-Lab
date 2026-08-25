@@ -9,7 +9,7 @@ def gpu_count_fragmentation(cluster: Cluster) -> float:
     if total == 0:
         return 0.0
     weighted_partiality = 0.0
-    for node in cluster.nodes:
+    for node in cluster.schedulable_nodes:
         capacity = len(node.gpus)
         if capacity == 0:
             continue
@@ -20,11 +20,15 @@ def gpu_count_fragmentation(cluster: Cluster) -> float:
 
 def gpu_memory_fragmentation(cluster: Cluster) -> float:
     """Fraction of memory on occupied exclusive GPUs stranded by sub-capacity requests."""
-    occupied_capacity = sum(gpu.memory_capacity_gb for gpu in cluster.gpus if gpu.occupied)
+    occupied_capacity = sum(
+        gpu.memory_capacity_gb for gpu in cluster.schedulable_gpus if gpu.occupied
+    )
     if occupied_capacity == 0:
         return 0.0
     stranded = sum(
-        gpu.memory_capacity_gb - gpu.allocated_memory_gb for gpu in cluster.gpus if gpu.occupied
+        gpu.memory_capacity_gb - gpu.allocated_memory_gb
+        for gpu in cluster.schedulable_gpus
+        if gpu.occupied
     )
     return stranded / occupied_capacity
 

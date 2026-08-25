@@ -38,10 +38,16 @@ class GeneratorConfig:
             raise ValueError("duration_sigma must be non-negative")
         if self.duration_distribution not in {"fixed", "exponential", "lognormal"}:
             raise ValueError("duration_distribution must be fixed, exponential, or lognormal")
-        if self.gpu_count_distribution is not None and any(
-            count <= 0 or weight <= 0 for count, weight in self.gpu_count_distribution
-        ):
-            raise ValueError("GPU count distribution values and weights must be positive")
+        if self.gpu_count_distribution is not None:
+            if not self.gpu_count_distribution:
+                raise ValueError("GPU count distribution must not be empty")
+            if any(count <= 0 or weight <= 0 for count, weight in self.gpu_count_distribution):
+                raise ValueError("GPU count distribution values and weights must be positive")
+            cluster_gpu_count = self.node_count * self.gpus_per_node
+            if any(count > cluster_gpu_count for count, _ in self.gpu_count_distribution):
+                raise ValueError(
+                    "GPU count distribution cannot request more GPUs than the cluster contains"
+                )
         if self.gpu_memory_distribution is not None and any(
             memory <= 0 or weight <= 0 for memory, weight in self.gpu_memory_distribution
         ):
@@ -119,9 +125,10 @@ def generate_scenario(config: GeneratorConfig) -> Scenario:
             gpu_count = rng.choices((1, 2, 4), (78, 18, 4))[0]
         else:
             gpu_count = rng.choices((1, 2, 4, 8), (55, 25, 15, 5))[0]
-        gpu_count = min(gpu_count, config.gpus_per_node * min(config.node_count, 2))
-        if training:
-            gpu_count = max(gpu_count, min(2, config.gpus_per_node))
+        if config.gpu_count_distribution is None:
+            gpu_count = min(gpu_count, config.node_count * config.gpus_per_node)
+            if training:
+                gpu_count = max(gpu_count, min(2, config.gpus_per_node))
         if config.duration_distribution == "fixed":
             sampled_duration = config.median_duration
         elif config.duration_distribution == "exponential":

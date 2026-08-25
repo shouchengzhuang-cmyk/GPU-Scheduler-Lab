@@ -4,6 +4,8 @@
 
 调度研究关注状态发生变化的时点：Job arrival、completion、preemption 和 resume。事件之间没有需要逐 tick 更新的行为，因此 priority queue 将复杂度集中在真实变化处，也让 10,000 Job benchmark 不必 `sleep` 或扫描空闲时间片。wall clock 只用于报告 simulator 自身运行耗时，不参与结果。
 
+`SCHEDULER_TICK` 是 aging bookkeeping event，不是 workload activity。当集群没有 running Job、队列只剩 aging tick 时，pending Job 已在全空闲 schedulable capacity 上放置失败，tick 无法改变可行性，因此 simulator 丢弃这些 tick，不让 policy 内部定时器污染 material horizon、utilization denominator 或 idle GPU time。
+
 ## 2. Job lifecycle
 
 ```text
@@ -36,6 +38,8 @@ Engine 对所有 placement 都要求原子性；gang flag 表示 workload 明确
 ## 6. Fragmentation
 
 Count fragmentation 使用 Node partiality $4p(1-p)$ 的容量加权平均；Memory fragmentation 使用独占 GPU 上 stranded memory 的比例；综合指标取二者平均。详细公式、0/1 语义和局限见 README。
+
+Cluster 保留全部 physical Node/GPU inventory，同时暴露 schedulable Node/GPU/显存容量。utilization、idle time、Node utilization 和 fragmentation 都只以 schedulable capacity 为分母；`schedulable: false` 的 Node 仍可出现在输入快照中，但不会稀释实验指标。
 
 ## 7. Determinism
 

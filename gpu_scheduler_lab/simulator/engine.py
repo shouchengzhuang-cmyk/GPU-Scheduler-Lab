@@ -79,6 +79,7 @@ class Simulator:
         now = 0.0
         while self._events:
             self._discard_obsolete_ticks()
+            self._discard_aging_ticks_without_running_jobs()
             if not self._events:
                 break
             event_time = self._events[0].time
@@ -107,7 +108,7 @@ class Simulator:
             memory_area=self._memory_area,
             total_memory_gb=self.cluster.total_memory_gb,
             node_area=self._node_area,
-            node_count=len(self.cluster.nodes),
+            node_count=len(self.cluster.schedulable_nodes),
             count_fragmentation_area=self._count_fragmentation_area,
             memory_fragmentation_area=self._memory_fragmentation_area,
             peak_gpu_utilization=self._peak_gpu_utilization,
@@ -170,6 +171,17 @@ class Simulator:
             job = self.by_id[self._events[0].job_id]
             if job in self.pending:
                 break
+            heapq.heappop(self._events)
+
+    def _discard_aging_ticks_without_running_jobs(self) -> None:
+        # A pending job that failed against an otherwise idle cluster cannot become
+        # feasible through aging alone. Dropping its bookkeeping ticks keeps the
+        # workload horizon independent of scheduler-internal timers.
+        while (
+            not self.running
+            and self._events
+            and self._events[0].event_type is EventType.SCHEDULER_TICK
+        ):
             heapq.heappop(self._events)
 
     def _complete(self, event: Event, now: float) -> None:
@@ -315,9 +327,11 @@ class Simulator:
     def _integrate_state(self, delta: float) -> None:
         if delta <= 0:
             return
-        busy = sum(gpu.occupied for gpu in self.cluster.gpus)
-        allocated_memory = sum(gpu.allocated_memory_gb for gpu in self.cluster.gpus)
-        active_nodes = sum(any(gpu.occupied for gpu in node.gpus) for node in self.cluster.nodes)
+        busy = sum(gpu.occupied for gpu in self.cluster.schedulable_gpus)
+        allocated_memory = sum(gpu.allocated_memory_gb for gpu in self.cluster.schedulable_gpus)
+        active_nodes = sum(
+            any(gpu.occupied for gpu in node.gpus) for node in self.cluster.schedulable_nodes
+        )
         count_fragmentation, memory_fragmentation, _ = fragmentation_snapshot(self.cluster)
         self._busy_gpu_time += busy * delta
         self._memory_area += allocated_memory * delta

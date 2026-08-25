@@ -128,6 +128,38 @@ def test_impossible_job_remains_pending_without_allocations() -> None:
     assert result.metrics["completion_rate"] == 0.0
 
 
+def test_aging_only_ticks_do_not_extend_workload_horizon() -> None:
+    cluster = make_cluster([[24]])
+    jobs = [Job("impossible", 0, 10, 1, 80, priority=Priority.NORMAL)]
+
+    fifo = Simulator(cluster, jobs, FIFOScheduler()).run()
+    preemptive = Simulator(cluster, jobs, PreemptiveScheduler()).run()
+
+    assert fifo.metrics["simulation_horizon"] == 0.0
+    assert preemptive.metrics["simulation_horizon"] == fifo.metrics["simulation_horizon"]
+    assert preemptive.metrics["idle_gpu_time"] == fifo.metrics["idle_gpu_time"] == 0.0
+    assert preemptive.metrics["average_gpu_utilization"] == 0.0
+
+
+def test_metrics_use_only_schedulable_capacity() -> None:
+    cluster = make_cluster([[24], [24]])
+    cluster.nodes[1].schedulable = False
+
+    assert cluster.physical_gpu_count == 2
+    assert cluster.total_gpu_count == 1
+    assert cluster.physical_memory_gb == 48
+    assert cluster.total_memory_gb == 24
+    assert len(cluster.schedulable_nodes) == 1
+
+    result = Simulator(cluster, [Job("job", 0, 10, 1, 24)], FIFOScheduler()).run()
+
+    assert result.metrics["average_gpu_utilization"] == 1.0
+    assert result.metrics["peak_gpu_utilization"] == 1.0
+    assert result.metrics["gpu_memory_utilization"] == 1.0
+    assert result.metrics["node_utilization"] == 1.0
+    assert result.metrics["idle_gpu_time"] == 0.0
+
+
 def test_same_input_has_identical_trace_and_metrics() -> None:
     cluster = make_cluster([[24, 40], [80, 80]])
     jobs = [

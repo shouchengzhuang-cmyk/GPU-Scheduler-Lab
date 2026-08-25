@@ -66,12 +66,30 @@ class Cluster:
         return [gpu for node in self.nodes for gpu in node.gpus]
 
     @property
-    def total_gpu_count(self) -> int:
+    def schedulable_nodes(self) -> list[Node]:
+        return [node for node in self.nodes if node.schedulable]
+
+    @property
+    def schedulable_gpus(self) -> list[GPU]:
+        return [gpu for node in self.schedulable_nodes for gpu in node.gpus]
+
+    @property
+    def physical_gpu_count(self) -> int:
         return sum(len(node.gpus) for node in self.nodes)
 
     @property
-    def total_memory_gb(self) -> float:
+    def physical_memory_gb(self) -> float:
         return sum(gpu.memory_capacity_gb for gpu in self.gpus)
+
+    @property
+    def total_gpu_count(self) -> int:
+        """Usable GPU capacity; excludes GPUs on unschedulable nodes."""
+        return len(self.schedulable_gpus)
+
+    @property
+    def total_memory_gb(self) -> float:
+        """Usable memory capacity; excludes GPUs on unschedulable nodes."""
+        return sum(gpu.memory_capacity_gb for gpu in self.schedulable_gpus)
 
     def gpu_by_id(self, gpu_id: str) -> GPU:
         for gpu in self.gpus:
@@ -81,11 +99,7 @@ class Cluster:
 
     def eligible_gpus(self, memory_gb: float) -> list[GPU]:
         return [
-            gpu
-            for node in self.nodes
-            if node.schedulable
-            for gpu in node.gpus
-            if gpu.can_host(memory_gb)
+            gpu for node in self.schedulable_nodes for gpu in node.gpus if gpu.can_host(memory_gb)
         ]
 
     def allocate(self, job: Job, gpu_ids: Iterable[str]) -> None:

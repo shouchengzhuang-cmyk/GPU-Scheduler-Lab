@@ -9,6 +9,7 @@ Mini-AI-Cloud 当前概念到 simulator 的映射：
 | Mini-AI-Cloud | GPU Scheduler Lab | 说明 |
 |---|---|---|
 | Worker `id` | Node `id` | Worker 作为资源/故障域 |
+| Worker schedulable state | Node `schedulable` | false 时保留 physical inventory，但不计入可调度指标分母 |
 | Worker labels | Node topology | 只保存 metadata，MVP 不做 selector |
 | GPU `device_uuid` | GPU `id` | 保持具体设备 identity |
 | `memory_total_mb` | `memory_capacity_gb` | 除以 1024 |
