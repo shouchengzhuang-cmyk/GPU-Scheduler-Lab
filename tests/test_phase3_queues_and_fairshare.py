@@ -52,6 +52,42 @@ def test_deep_hierarchy_enforces_ancestor_limit() -> None:
     assert not hierarchy.can_allocate("team/research", ResourceVector(3, 20), {}, borrowing=True)
 
 
+def test_no_borrow_honors_only_configured_guarantee_dimensions() -> None:
+    queue = QueueSpec.from_dict(
+        {
+            "id": "tenant",
+            "parent": "root",
+            "guaranteed": {"gpu_units": 1},
+            "limit": {"gpu_units": 1},
+        }
+    )
+    scenario = Scenario(
+        Cluster.from_dict(
+            {
+                "nodes": [
+                    {
+                        "id": "node",
+                        "gpus": [{"id": "g0", "memory_gb": 40}],
+                    }
+                ]
+            }
+        ),
+        [Job("job", 0, 1, 1, 20, queue_id="tenant")],
+        queues=(queue,),
+    )
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-no-borrow", scenario)
+    ).run()
+    assert result.jobs[0].first_start_time == 0
+    assert result.jobs[0].completion_time == 1
+    assert queue.to_dict()["guaranteed"] == {"gpu_units": 1.0}
+
+    zero_gpu = QueueSpec.from_dict({"id": "zero", "parent": "root", "guaranteed": {"gpu_units": 0}})
+    assert not QueueHierarchy([zero_gpu]).can_allocate(
+        "zero", ResourceVector(1, 20), {}, borrowing=False
+    )
+
+
 def test_weighted_drf_is_finite_and_weight_adjusted() -> None:
     capacity = ResourceVector(8, 320)
     usage = ResourceVector(4, 80)

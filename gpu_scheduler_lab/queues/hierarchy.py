@@ -93,7 +93,19 @@ class QueueHierarchy:
                 return False
         queue = self.specs[queue_id]
         projected_queue = aggregate[queue_id] + demand
-        if projected_queue.fits_within(queue.guaranteed):
+        dimensions = queue.guaranteed_dimensions or frozenset()
+        within_guarantee = (
+            (
+                "gpu_units" not in dimensions
+                or projected_queue.gpu_units <= queue.guaranteed.gpu_units + 1e-9
+            )
+            and (
+                "gpu_memory_gb" not in dimensions
+                or projected_queue.gpu_memory_gb <= queue.guaranteed.gpu_memory_gb + 1e-9
+            )
+            and bool(dimensions)
+        )
+        if within_guarantee:
             return True
         return borrowing and queue.borrowing_enabled
 

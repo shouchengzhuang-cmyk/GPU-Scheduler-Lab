@@ -80,12 +80,26 @@ class QueueSpec:
     borrowing_enabled: bool = True
     reclaimable: bool = True
     priority_offset: int = 0
+    guaranteed_dimensions: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
         if not self.id or self.id.startswith("/") or self.id.endswith("/"):
             raise ValueError("queue id must be a non-empty normalized path")
         if not math.isfinite(self.weight) or self.weight <= 0:
             raise ValueError("queue weight must be finite and positive")
+        dimensions = self.guaranteed_dimensions
+        if dimensions is None:
+            dimensions = frozenset(
+                name
+                for name, value in (
+                    ("gpu_units", self.guaranteed.gpu_units),
+                    ("gpu_memory_gb", self.guaranteed.gpu_memory_gb),
+                )
+                if value > 0
+            )
+            object.__setattr__(self, "guaranteed_dimensions", dimensions)
+        if not dimensions.issubset({"gpu_units", "gpu_memory_gb"}):
+            raise ValueError("guaranteed dimensions contain an unknown resource")
         if self.limit is not None and not self.guaranteed.fits_within(self.limit):
             raise ValueError(f"queue {self.id} guarantee exceeds its limit")
 
@@ -93,15 +107,24 @@ class QueueSpec:
     def from_dict(cls, data: dict[str, Any]) -> QueueSpec:
         queue_id = str(data.get("id", "")).strip()
         raw_parent = data.get("parent")
+        raw_guaranteed = data.get("guaranteed")
+        if raw_guaranteed is not None and not isinstance(raw_guaranteed, dict):
+            raise ValueError("resource vector must be a mapping")
+        guaranteed_dimensions = frozenset(
+            key
+            for key in ("gpu_units", "gpu_memory_gb")
+            if isinstance(raw_guaranteed, dict) and key in raw_guaranteed
+        )
         return cls(
             id=queue_id,
             parent=str(raw_parent).strip() if raw_parent is not None else None,
             weight=float(data.get("weight", 1.0)),
-            guaranteed=ResourceVector.from_dict(data.get("guaranteed")),
+            guaranteed=ResourceVector.from_dict(raw_guaranteed),
             limit=ResourceVector.limit_from_dict(data.get("limit")),
             borrowing_enabled=bool(data.get("borrowing_enabled", True)),
             reclaimable=bool(data.get("reclaimable", True)),
             priority_offset=int(data.get("priority_offset", 0)),
+            guaranteed_dimensions=guaranteed_dimensions,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -109,7 +132,11 @@ class QueueSpec:
             "id": self.id,
             "parent": self.parent,
             "weight": self.weight,
-            "guaranteed": self.guaranteed.to_dict(),
+            "guaranteed": {
+                name: getattr(self.guaranteed, name)
+                for name in ("gpu_units", "gpu_memory_gb")
+                if name in (self.guaranteed_dimensions or ())
+            },
             "borrowing_enabled": self.borrowing_enabled,
             "reclaimable": self.reclaimable,
         }
