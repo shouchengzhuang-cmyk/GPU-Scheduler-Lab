@@ -6,14 +6,16 @@ import json
 from pathlib import Path
 from typing import Any
 
+from gpu_scheduler_lab.experiments import run_experiment
 from gpu_scheduler_lab.integrations.mini_ai_cloud import import_mini_ai_cloud_export
 from gpu_scheduler_lab.scenario import Scenario, load_scenario, write_scenario
 from gpu_scheduler_lab.schedulers import create_scheduler
 from gpu_scheduler_lab.simulator.engine import SimulationResult, Simulator
+from gpu_scheduler_lab.traces import AlibabaSpotGPUTraceAdapter, TraceFilter
 from gpu_scheduler_lab.visualization import plot_comparison, plot_timeline
 from gpu_scheduler_lab.workload import GeneratorConfig, generate_scenario
 
-SCHEDULERS = ("fifo", "binpack", "spread", "preemptive")
+SCHEDULERS = ("fifo", "binpack", "spread", "preemptive", "topology", "backfill")
 
 
 def _weighted_ints(value: str) -> tuple[tuple[int, float], ...]:
@@ -45,6 +47,17 @@ def _priority_weights(value: str) -> tuple[float, float, float, float]:
     return weights
 
 
+def _gpu_memory_mapping(value: str) -> tuple[str, float]:
+    try:
+        model, raw_memory = value.rsplit("=", 1)
+        memory = float(raw_memory)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("use MODEL=GB, for example GPU-series-1=24") from exc
+    if not model or memory <= 0:
+        raise argparse.ArgumentTypeError("GPU memory mapping requires a model and positive GB")
+    return model, memory
+
+
 def _run(scenario: Scenario, scheduler_name: str) -> SimulationResult:
     return Simulator(scenario.cluster, scenario.jobs, create_scheduler(scheduler_name)).run()
 
@@ -70,7 +83,11 @@ def _write_outputs(
         json.dump(payload, handle, indent=2, sort_keys=True)
         handle.write("\n")
     rows = [{"scheduler": result.scheduler, **_scalar_metrics(result)} for result in results]
-    fieldnames = list(rows[0]) if rows else ["scheduler"]
+    fieldnames = (
+        ["scheduler", *sorted({key for row in rows for key in row if key != "scheduler"})]
+        if rows
+        else ["scheduler"]
+    )
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -158,6 +175,38 @@ def _import_mini_ai_cloud(args: argparse.Namespace) -> None:
     )
 
 
+def _trace_import(args: argparse.Namespace) -> None:
+    if args.format != "alibaba":
+        raise ValueError(f"unsupported trace format: {args.format}")
+    adapter = AlibabaSpotGPUTraceAdapter(
+        args.input,
+        gpu_memory_gb=dict(args.gpu_memory),
+    )
+    trace_filter = TraceFilter(
+        start=args.start,
+        duration=args.duration,
+        max_jobs=args.max_jobs,
+        max_nodes=args.max_nodes,
+        sample_rate=args.sample_rate,
+        seed=args.seed,
+        skip_invalid=args.skip_invalid,
+    )
+    scenario = adapter.to_scenario(trace_filter)
+    write_scenario(scenario, args.output)
+    print(
+        f"Scenario: {args.output} ({len(scenario.cluster.nodes)} nodes, {len(scenario.jobs)} jobs)"
+    )
+
+
+def _experiment(args: argparse.Namespace) -> None:
+    artifacts = run_experiment(args.config)
+    print(
+        f"Manifest: {artifacts.manifest}\nRuns: {artifacts.runs}\n"
+        f"Summary CSV: {artifacts.summary_csv}\nSummary JSON: {artifacts.summary_json}\n"
+        f"Comparison chart: {artifacts.comparison}"
+    )
+
+
 def _add_output_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-dir", type=Path, default=Path("results"))
     parser.add_argument("--no-charts", action="store_true")
@@ -180,7 +229,11 @@ def build_parser() -> argparse.ArgumentParser:
     compare.set_defaults(handler=_compare)
 
     generate = subparsers.add_parser("generate", help="write a seeded synthetic scenario")
-    generate.add_argument("--profile", choices=("mixed", "fragmentation", "burst"), required=True)
+    generate.add_argument(
+        "--profile",
+        choices=("mixed", "fragmentation", "burst", "topology", "backfill"),
+        required=True,
+    )
     generate.add_argument("--jobs", type=int, default=100)
     generate.add_argument("--nodes", type=int, default=8)
     generate.add_argument("--gpus-per-node", type=int, default=8)
@@ -220,6 +273,30 @@ def build_parser() -> argparse.ArgumentParser:
     importer.add_argument("--input", type=Path, required=True)
     importer.add_argument("--output", type=Path, required=True)
     importer.set_defaults(handler=_import_mini_ai_cloud)
+
+    trace_import = subparsers.add_parser("trace-import", help="normalize a production trace")
+    trace_import.add_argument("--format", choices=("alibaba",), required=True)
+    trace_import.add_argument("--input", type=Path, required=True)
+    trace_import.add_argument("--start", type=float, default=0.0)
+    trace_import.add_argument("--duration", type=float)
+    trace_import.add_argument("--max-jobs", type=int)
+    trace_import.add_argument("--max-nodes", type=int)
+    trace_import.add_argument("--sample-rate", type=float, default=1.0)
+    trace_import.add_argument("--seed", type=int, default=0)
+    trace_import.add_argument("--skip-invalid", action="store_true")
+    trace_import.add_argument(
+        "--gpu-memory",
+        action="append",
+        type=_gpu_memory_mapping,
+        default=[],
+        metavar="MODEL=GB",
+    )
+    trace_import.add_argument("--output", type=Path, required=True)
+    trace_import.set_defaults(handler=_trace_import)
+
+    experiment = subparsers.add_parser("experiment", help="run a reproducible experiment")
+    experiment.add_argument("--config", type=Path, required=True)
+    experiment.set_defaults(handler=_experiment)
     return parser
 
 

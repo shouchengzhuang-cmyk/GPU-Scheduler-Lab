@@ -1,0 +1,9 @@
+experiment:
+  name: preemption-cost-comparison
+workload:
+  type: scenario
+  scenario: scenarios/preemption-cost.yaml
+schedulers: [fifo, preemptive]
+seeds: [1]
+output:
+  directory: experiment-results/preemption-cost

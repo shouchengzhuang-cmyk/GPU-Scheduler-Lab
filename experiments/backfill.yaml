@@ -1,0 +1,9 @@
+experiment:
+  name: backfill-comparison
+workload:
+  type: scenario
+  scenario: scenarios/backfill.yaml
+schedulers: [fifo, backfill]
+seeds: [1]
+output:
+  directory: experiment-results/backfill
