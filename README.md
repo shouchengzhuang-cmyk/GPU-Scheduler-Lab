@@ -1,6 +1,6 @@
 # GPU Scheduler Lab
 
-GPU Scheduler Lab 是一个可复现、可测试、可 benchmark 的 GPU 集群离散事件调度模拟器。它在普通 CPU 电脑上比较 FIFO、BinPack、Spread 和 Priority + Preemption 对 GPU 利用率、显存浪费、碎片、等待时间、公平性与 SLA 的影响。
+GPU Scheduler Lab 是一个可复现、可测试、可 benchmark 的 GPU 集群离散事件调度模拟器。MVP 用 synthetic workload 比较基础策略；Phase II 增加生产 trace replay、异构 GPU 型号、层级拓扑、reservation/backfill、抢占开销和可复现实验 manifest。
 
 它是调度算法实验室，不连接真实 NVIDIA GPU、CUDA 或 Kubernetes，也不是生产调度器。
 
@@ -11,13 +11,13 @@ GPU 集群同时面对设备数量、异构显存、gang 作业、优先级和�
 ## Architecture
 
 ```text
-Scenario / Workload
+Synthetic / Production Trace / Mini-AI-Cloud Snapshot
         |
         v
  Event Queue ---> Simulator Clock
         |               |
         v               v
-   Scheduler ------> Cluster State
+   Scheduler ------> Cluster + Topology State
         |
         v
    Placement
@@ -26,10 +26,12 @@ Scenario / Workload
  Trace + Metrics
         |
         v
- Benchmark / Charts
+ Experiment Manifest / Benchmark / Charts
 ```
 
 模型中的 GPU 是独占设备。一个作业占用 GPU 后，其他作业不能共享该设备；`gpu_memory_gb` 用于容量约束和显存浪费计量。所有多 GPU placement 都是原子的，`gang: true` 进一步启用跨节点 gang 指标。
+
+Phase II 继续复用唯一的 `Scenario -> Simulator -> Scheduler -> Metrics` 路径。Trace adapter 只负责 normalization，simulation engine 不读取 Alibaba-specific schema。
 
 ## Quick start (Ubuntu / WSL)
 
@@ -70,6 +72,29 @@ uv pip install --python .venv/bin/python -e '.[dev]'
 - `mixed`：inference 与 training 混合；
 - `fragmentation`：异构显存请求，强调 stranded capacity；
 - `burst`：短时间 inference 突发，强调 tail wait 和抢占。
+- `topology`：gang-heavy、异构型号和 rack/zone locality 偏好；
+- `backfill`：大型长 gang 与短小 Job 混合，制造 reservation window。
+
+导入 Alibaba 2026 spot-GPU trace 的小 fixture：
+
+```bash
+.venv/bin/python -m gpu_scheduler_lab trace-import \
+  --format alibaba \
+  --input tests/fixtures/alibaba_trace_sample \
+  --max-jobs 2 \
+  --gpu-memory GPU-series-1=24 \
+  --output scenarios/alibaba-sample.generated.yaml
+```
+
+完整数据的下载、attribution 和 normalization 规则见 [Alibaba trace guide](docs/traces/alibaba.md)。数据默认放在被 Git 忽略的 `.data/`，CI 不下载生产 trace。
+
+正式实验入口：
+
+```bash
+.venv/bin/python -m gpu_scheduler_lab experiment --config experiments/topology.yaml
+```
+
+每次输出 `manifest.json`、`runs.json`、`summary.csv`、`summary.json` 和 `comparison.png`；manifest 保存 Git SHA、Python 版本、scenario SHA256、trace 版本、scheduler、seed 和 metrics。
 
 ## Scheduling policies
 
@@ -99,9 +124,17 @@ Spread 按 Node 当前占用 GPU 数升序排列，并轮询从不同 Node 取�
 
 Preemptive policy 使用 BinPack placement，pending queue 按有效优先级降序排列。`low/normal/high/critical` 分别为 0–3；等待每满 30 个逻辑时间单位提升一级，最高到 critical，作为 starvation protection。
 
-高优先级作业放置失败时，只考虑基础优先级严格更低、且当前 running priority 也更低的 running jobs；aging 影响 dispatch 顺序，但不会绕过“不得抢占同级或更高基础优先级”的约束。victim 顺序确定为：低优先级优先、能满足 incoming 显存要求的 GPU 多者优先、同等可恢复资源下总占用 GPU 少者优先、累计运行时间短者优先、Job ID 稳定决胜。被抢占作业释放全部设备、保留累计运行时间并回到 pending；resume 只执行剩余 duration。旧 completion event 由 `run_generation` 隔离，不能释放新 execution 的资源。
+高优先级作业放置失败时，只考虑基础优先级严格更低、且当前 running priority 也更低的 running jobs；aging 影响 dispatch 顺序，但不会绕过“不得抢占同级或更高基础优先级”的约束。被抢占作业先进入 checkpoint。checkpoint 阶段继续占用 GPU，但 productive runtime 不推进；完成后释放资源并回到 pending。恢复时先分配 GPU，restart delay 期间仍不推进 productive runtime，之后只执行剩余 duration。默认 cost 为 0，因此旧 MVP 行为保持不变。旧 completion event 由 `run_generation` 隔离，不能释放新 execution 的资源。
 
-这是确定性的 lowest-cost-first 贪心 victim set，不声称求解全局最优组合。
+victim score 考虑优先级、适配 GPU、collateral GPU、剩余 runtime、checkpoint/restart cost 和稳定 ID。这是确定性贪心，不声称求解全局最优组合。
+
+### TopologyAware
+
+`topology` 统一执行型号、显存、gang 和 `require_same_node|require_same_rack` 可行性检查，再按 locality domain 数、最大与平均 pairwise distance、count fragmentation delta、显存浪费和稳定 GPU ID 排序。距离固定为 same-node 0、same-rack 1、same-zone 2、cross-zone 3。`prefer_*` 影响评分，`require_*` 是硬约束。
+
+### Reservation + Backfill
+
+`backfill` 为 FIFO head 建立不占用 GPU 的 reservation，并根据当前 running Job 的已知完成时间计算 oracle-style 预计开始时间。后续 Job 只有在 `now + remaining_duration <= reserved_start` 时才能 backfill；它不会延迟 reservation guarantee。这个 estimate 使用 simulator 已知 duration，真实 scheduler 通常没有同等准确的信息。
 
 ### Gang scheduling
 
@@ -109,7 +142,7 @@ Preemptive policy 使用 BinPack placement，pending queue 按有效优先级降
 
 ## Metrics
 
-Cluster metrics 包括平均/峰值 GPU utilization、GPU memory utilization、Node utilization、idle GPU time，以及下述 count/memory fragmentation。Job metrics 包括 wait、turnaround、completion、preemption 和 SLA；Scheduling metrics 包括 placement attempts、failed attempts 和 cross-node gang placement。Cluster 同时保留 physical capacity 和 schedulable capacity；MVP 指标默认只用 `schedulable: true` 的 Node/GPU 作为分母，cordoned Node 不产生虚假 idle capacity。
+Cluster metrics 包括平均/峰值 GPU utilization、GPU memory utilization、Node utilization、idle GPU time，以及下述 count/memory fragmentation。Job metrics 包括 wait、turnaround、completion、preemption 和 SLA；Scheduling metrics 还包括 topology placement/distance、reservation/backfill 保证和 checkpoint/restart overhead。Cluster 同时保留 physical capacity 和 schedulable capacity；默认只用 `schedulable: true` 的 Node/GPU 作为分母，cordoned Node 不产生虚假 idle capacity。
 
 时间平均指标通过逻辑事件间隔积分，不依赖 `time.sleep()` 或真实 wall clock。Aging tick 只负责 starvation protection；当没有 running Job、只剩 aging bookkeeping event 时，它不会延长 workload horizon。
 
@@ -145,19 +178,19 @@ $$
 
 ### Jain's Fairness Index
 
-对每个 `group`（未指定时用 priority）计算服务率 $x_g$：已完成 GPU-time / 请求 GPU-time，然后计算：
+对每个 `group`（未指定时用 priority）先计算 $x_g=completion\_ratio_g\cdot latency\_efficiency_g$，然后计算：
 
 $$
 J(x)=\frac{(\sum_g x_g)^2}{n\sum_g x_g^2}
 $$
 
-1 表示各组服务率相等，越接近 $1/n$ 越不公平。它衡量 workload group 的相对完成服务率，不代表单个 Job 的等待时间公平。
+1 表示各组 service quality 相等，越接近 $1/n$ 越不公平。它同时惩罚未完成需求和长 turnaround，但仍不代表单个 Job 的等待时间公平。
 
 ## Reproducibility
 
 - 所有 arrival/completion 都由 `heapq` 驱动的逻辑时钟处理；
 - scheduler 内部 aging-only tick 不进入 material workload horizon；
-- 同一时刻先 completion、后 arrival，再执行 scheduling；
+- 同一时刻按 completion、checkpoint-complete、restart-complete、arrival、aging tick 排序，再执行 scheduling；
 - placement、pending order 和 victim order 都有稳定决胜字段；
 - synthetic generator 使用局部 `random.Random(seed)`；
 - `compare` 对同一个不可变 scenario 分别重建状态，不会串用上一策略的 allocation。
@@ -188,10 +221,10 @@ $$
 
 | Scheduler | Simulator elapsed | Completion | Avg GPU util | Avg wait | P95 wait | Fragmentation | SLA violation |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| BinPack | 8.974 s | 1.000 | 0.5520 | 0.035 | 0.000 | 0.2777 | 0.0000 |
-| Spread | 8.223 s | 1.000 | 0.5520 | 0.000 | 0.000 | 0.5594 | 0.0000 |
+| BinPack | 11.001 s | 1.000 | 0.5520 | 0.035 | 0.000 | 0.2777 | 0.0000 |
+| Spread | 9.816 s | 1.000 | 0.5520 | 0.000 | 0.000 | 0.5594 | 0.0000 |
 
-双策略 simulation 段 wall time 为 17.225 s；含 Python 启动、workload 生成和 JSON 写出的完整进程为 17.69 s，峰值 RSS 约 37,764 KiB。原始结果由脚本重新生成，不提交 `results/`。
+Phase II 双策略 simulation 段 wall time 为 20.898 s；含 Python 启动、workload 生成和 JSON 写出的完整进程为 21.56 s，峰值 RSS 约 41,284 KiB。逻辑指标与 MVP 基线一致；新增 topology audit 让本次 wall time 高于旧实现，但没有改变 scheduler correctness。原始结果由脚本重新生成，不提交 `results/`。
 
 ## Development and CI
 
@@ -204,12 +237,15 @@ $$
 
 GitHub Actions 在 Ubuntu + Python 3.12 上执行同样四项检查，不需要 GPU 或外部服务。
 
+Phase II smoke 还会运行 topology scenario、backfill scenario 和 Alibaba fixture import；CI 不访问完整数据集。
+
 ## Limitations
 
 这是离散事件 simulation。它没有声称验证：
 
 - 真实 NVIDIA GPU、CUDA kernel、显存分配器或 OOM；
 - NCCL、NVLink、PCIe、网络通信或真实 distributed training；
+- 真实 checkpoint bandwidth、restart latency 或 scheduler control-plane latency；
 - MIG、GPU time-sharing、功耗和热管理；
 - Kubernetes device plugin、scheduler plugin 或 production scheduler behavior；
 - vLLM inference throughput、TTFT、TP/PP 性能；
@@ -218,3 +254,4 @@ GitHub Actions 在 Ubuntu + Python 3.12 上执行同样四项检查，不需要 
 Wall-clock benchmark 只衡量本机 Python 事件循环和策略实现，不能外推真实集群吞吐。
 
 详细设计见 [docs/design.md](docs/design.md)。
+Phase II 架构、复杂度与证据边界见 [docs/phase2.md](docs/phase2.md)。

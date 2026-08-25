@@ -29,3 +29,23 @@ jobs:
           --scenario scenarios/demo.yaml
           --schedulers fifo,binpack,spread,preemptive
           --output-dir build/smoke
+      - name: Phase II topology smoke
+        run: >-
+          python -m gpu_scheduler_lab compare
+          --scenario scenarios/topology.yaml
+          --schedulers spread,topology
+          --output-dir build/topology-smoke
+      - name: Phase II backfill smoke
+        run: >-
+          python -m gpu_scheduler_lab compare
+          --scenario scenarios/backfill.yaml
+          --schedulers fifo,backfill
+          --output-dir build/backfill-smoke
+      - name: Trace fixture smoke
+        run: >-
+          python -m gpu_scheduler_lab trace-import
+          --format alibaba
+          --input tests/fixtures/alibaba_trace_sample
+          --max-jobs 2
+          --gpu-memory GPU-series-1=24
+          --output build/alibaba-sample.yaml

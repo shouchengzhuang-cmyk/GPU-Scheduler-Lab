@@ -2,9 +2,9 @@
 
 ## 1. Why discrete-event simulation
 
-调度研究关注状态发生变化的时点：Job arrival、completion、preemption 和 resume。事件之间没有需要逐 tick 更新的行为，因此 priority queue 将复杂度集中在真实变化处，也让 10,000 Job benchmark 不必 `sleep` 或扫描空闲时间片。wall clock 只用于报告 simulator 自身运行耗时，不参与结果。
+调度研究关注状态发生变化的时点：Job arrival、completion、checkpoint、restart、preemption 和 resume。事件之间没有需要逐 tick 更新的行为，因此 priority queue 将复杂度集中在真实变化处，也让 10,000 Job benchmark 不必 `sleep` 或扫描空闲时间片。wall clock 只用于报告 simulator 自身运行耗时，不参与结果。
 
-`SCHEDULER_TICK` 是 aging bookkeeping event，不是 workload activity。当集群没有 running Job、队列只剩 aging tick 时，pending Job 已在全空闲 schedulable capacity 上放置失败，tick 无法改变可行性，因此 simulator 丢弃这些 tick，不让 policy 内部定时器污染 material horizon、utilization denominator 或 idle GPU time。
+`SCHEDULER_TICK` 是 aging bookkeeping event，不是 workload activity。当集群没有 running、checkpointing 或 restarting Job，队列只剩 aging tick 时，pending Job 已在全空闲 schedulable capacity 上放置失败，tick 无法改变可行性，因此 simulator 丢弃这些 tick，不让 policy 内部定时器污染 material horizon、utilization denominator 或 idle GPU time。
 
 ## 2. Job lifecycle
 
@@ -12,14 +12,17 @@
 not arrived -> pending -> running -> completed
                     ^        |
                     |        v
-                    +-- preempted
+                    + checkpointing
+                    |        |
+                    |        v
+                    +-- restarting
 ```
 
 `accumulated_runtime` 只在 preempt/complete 更新。每次 start/resume 增加 `run_generation`，completion event 携带 generation；被抢占前排入的旧 completion event 因 generation 不匹配而被忽略。
 
 ## 3. Scheduler interface
 
-`Scheduler.place(cluster, job)` 是无副作用函数：返回恰好 `gpu_count` 个 GPU ID，或 `None`。Engine 是唯一修改 Cluster/Job lifecycle 的组件。这一边界让 policy 容易单测，并保证 gang all-or-nothing。
+`Scheduler.place(cluster, job)` 是无副作用函数：返回恰好 `gpu_count` 个 GPU ID，或 `None`。Engine 是唯一修改 Cluster/Job lifecycle 的组件。这一边界让 policy 容易单测，并保证 gang all-or-nothing。`prepare()` 只给 reservation scheduler 一个调度轮次的只读视图，`on_job_started()` 只在 Engine 已提交 allocation 后更新 policy bookkeeping。
 
 `pending_key(job, now)` 控制队列顺序。普通策略使用 arrival + stable Job ID；preemptive policy 使用 aged effective priority。
 
@@ -27,7 +30,11 @@ not arrived -> pending -> running -> completed
 
 ## 4. Preemption semantics
 
-只有 placement 失败且存在优先级更低的 running jobs 时才抢占。victim 采用确定性 cost order 的最短可行前缀：先比较能满足 incoming 显存要求的可恢复 GPU 数；同等可恢复资源下优先驱逐总占用 GPU 更少的 Job，避免异构集群中释放大量无用的小显存 GPU。被抢占作业保留已运行时间、释放所有 GPU、回 pending；不模拟 checkpoint I/O 或 restart overhead，这是已知乐观假设。
+只有 placement 失败且存在优先级更低的 running jobs 时才抢占。victim 采用确定性 greedy order，考虑适配 GPU、collateral GPU、剩余 productive runtime、checkpoint/restart cost 和稳定 ID。
+
+抢占开始时 productive runtime 冻结。checkpoint delay 内 GPU 仍归 victim，checkpoint-complete 才释放。resume 先分配 GPU，再经历不推进 productive runtime 的 restart delay。cost 为 0 时保持 MVP 的即时释放和恢复语义。`run_generation` 同时隔离 checkpoint 前的旧 completion event。
+
+同一逻辑时间按 `JOB_COMPLETE`、`JOB_CHECKPOINT_COMPLETE`、`JOB_RESTART_COMPLETE`、`JOB_ARRIVAL`、`SCHEDULER_TICK` 排序，再执行 scheduling。
 
 Aging 每等待 30 个逻辑时间单位提升一级，防止 low/normal 在资源释放点永久被新 high jobs 越过。它不会绕过 victim 必须具有更低基础优先级的约束；dispatch 时的 aged priority 会固定到该 running attempt，避免同一时刻反向抢占。
 
@@ -56,3 +63,25 @@ Cluster 保留全部 physical Node/GPU inventory，同时暴露 schedulable Node
 真实 scheduler 还要处理并发 claim、持久化 reservation、Worker lease、device health drift、runtime startup failure、checkpoint 成本、网络拓扑和资源遥测陈旧。本 simulator 使用单线程内存状态，目标是隔离 policy trade-off，不验证控制面一致性或 GPU runtime。
 
 Mini-AI-Cloud 负责 production-minded control-plane experiments；GPU Scheduler Lab 通过稳定文件契约接收其 inventory/workload 快照用于离线策略研究，两者证据不可互相替代。
+
+## 9. Phase II GPU model and topology
+
+`GPU.is_compatible(job)` 集中检查 memory 与 exact/allowed model，`GPU.can_host(job)` 再叠加 free 状态。`require_same_node` 与 `require_same_rack` 是硬约束；普通 scheduler 遇到 required topology 时复用 topology placement。
+
+`topology_distance()` 集中定义 same-node 0、same-rack 1、same-zone 2、cross-zone 3。缺失 rack 或 zone 时，不同 Node 使用隔离的 unknown domain，不会被错误归为同一机架。
+
+TopologyAware 构造 global、node、rack、zone 和每个 seed Node 的邻近候选，不枚举 $\binom{G}{k}$ 全组合。score 顺序为 required feasibility、preferred domain count、maximum/average pairwise distance、count fragmentation delta、memory waste、stable GPU IDs。它是确定性启发式，不声称全局最优。
+
+## 10. Phase II reservation and backfill
+
+Backfill scheduler 为 FIFO head 保存不占用 GPU 的 `Reservation`。它复制当前 ownership，按 running completion 顺序释放资源，并用 topology placement 计算最早可行时间。后续 Job 只有满足 `now + remaining_duration <= estimated_start_time` 才能启动。
+
+这是 conservative EASY-style 规则。它保证 reservation 不被 backfill 延迟，但可能推迟不能在 window 内完成的小 Job。estimate 直接读取 simulation duration，是 oracle-style limitation。
+
+## 11. Phase II metrics and reproducibility
+
+Topology metrics 分类 same-node、same-rack、cross-rack、cross-zone，并对 GPU pair 的层级距离求平均。Reservation 与 preemption overhead 都输出独立 audit metrics；require violation 与 reservation delay violation 正常必须为 0。
+
+Experiment harness 使用 canonical scenario JSON 的 SHA256 证明各 scheduler 输入一致，并保存 Git SHA、Python version、trace source/version、seed、metrics 和聚合结果。manifest timestamp、Git SHA 与 wall-clock elapsed 不参与 deterministic result assertion。
+
+复杂度热路径：TopologyAware 只构造有限 domain 候选；Backfill 只在 blocked head 时复制一次 cluster；Preemptive 只在失败 placement 时构造 projected cluster。10k BinPack/Spread benchmark 继续作为稳定 regression baseline。

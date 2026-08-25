@@ -10,9 +10,9 @@ Mini-AI-Cloud 当前概念到 simulator 的映射：
 |---|---|---|
 | Worker `id` | Node `id` | Worker 作为资源/故障域 |
 | Worker schedulable state | Node `schedulable` | false 时保留 physical inventory，但不计入可调度指标分母 |
-| Worker labels | Node topology | 只保存 metadata，MVP 不做 selector |
+| Worker labels | Node topology | v1 保留 metadata；Phase II 可读取 `zone`/`rack`，但不要求主项目改契约 |
 | GPU `device_uuid` | GPU `id` | 保持具体设备 identity |
-| `memory_total_mb` | `memory_capacity_gb` | 除以 1024 |
+| `memory_total_mb` | `memory_capacity_gb` | 除以 1024；v1 未提供 model 时使用 `generic` |
 | unhealthy GPU | filtered | 不进入可调度 inventory |
 | Task `queued_at` / `arrival_time` | Job `arrival_time` | ISO timestamp 归一化到最早任务为 0 |
 | `duration_seconds` / `timeout_seconds` | Job `duration` | 前者优先；这是实验输入，不是运行时预测 |
@@ -61,6 +61,8 @@ python -m gpu_scheduler_lab import-mini-ai-cloud \
 ```
 
 生成 YAML 的 `metadata` 保留 source、contract version 和过滤的 CPU-only Task 数量。
+
+Phase II 没有擅自升级文件 contract。若未来 v2 增加 GPU model 或 zone/rack，adapter 必须继续接受 v1，并且仍只做离线文件转换。
 
 ## Result handoff
 
