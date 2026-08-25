@@ -66,6 +66,25 @@ def test_alibaba_unknown_gpu_memory_requires_mapping(tmp_path: Path) -> None:
         AlibabaSpotGPUTraceAdapter(tmp_path).to_scenario(TraceFilter())
 
 
+def test_alibaba_skip_invalid_handles_truncated_csv_row(tmp_path: Path) -> None:
+    (tmp_path / "node_info_df.csv").write_text(
+        "node_name,gpu_model,gpu_capacity_num,cpu_num\nn,A10,1,8\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "job_info_df.csv").write_text(
+        "job_name,organization,gpu_model,cpu_request,gpu_request,worker_num,submit_time,duration,job_type\n"
+        "good,o,A10,1,1,1,0,1,HP\n"
+        "truncated,o,A10,1,1\n",
+        encoding="utf-8",
+    )
+
+    scenario = AlibabaSpotGPUTraceAdapter(tmp_path).to_scenario(TraceFilter(skip_invalid=True))
+
+    assert [job.id for job in scenario.jobs] == ["good"]
+    assert scenario.metadata["normalization"]["invalid_rows"] == 1
+    assert scenario.metadata["warnings"] == ["row 3: worker_num must not be empty"]
+
+
 def test_alibaba_dataset_absence_is_a_local_error_not_an_import_failure(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="missing Alibaba trace files"):
         AlibabaSpotGPUTraceAdapter(tmp_path)

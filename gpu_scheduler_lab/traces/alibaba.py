@@ -237,7 +237,9 @@ def _read_csv(path: Path, required: set[str]) -> list[dict[str, str]]:
         missing = sorted(required - fields)
         if missing:
             raise ValueError(f"{path}: missing required columns: {', '.join(missing)}")
-        return [dict(row) for row in reader]
+        return [
+            {key: value or "" for key, value in row.items() if key is not None} for row in reader
+        ]
 
 
 def _required(row: dict[str, str], key: str) -> str:
