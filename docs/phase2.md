@@ -60,7 +60,7 @@ running
 
 checkpoint/restart cost 都进入 turnaround。`wasted_productive_gpu_time` 表示 overhead 阶段占用但不推进 productive runtime 的 GPU-time；模型不包含真实 checkpoint bandwidth 或丢失工作重算。
 
-多 victim 抢占使用 Engine 内部临时 reservation：先完成 checkpoint 的 victim 保持 suspended，释放设备不计为占用，也不会被其他 Job 抢走；incoming gang 启动后再把 victim 放回 pending。它不写 GPU owner，也不同于 backfill scheduler 的 Job reservation。
+需要 checkpoint 的抢占使用 Engine 内部临时 reservation：完整 projected placement（victim 将释放的 GPU 和其中原本空闲的 GPU）都不会被其他 Job 抢走，也不计为占用；先完成 checkpoint 的 victim 保持 suspended，incoming gang 启动后再回到 pending。它不写 GPU owner，也不同于 backfill scheduler 的 Job reservation。
 
 ## Experiment harness
 

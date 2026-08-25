@@ -341,9 +341,7 @@ class Simulator:
             return None
         defer_victims = any(victim.checkpoint_cost > 0 for victim in selected)
         if defer_victims:
-            self._preemption_reserved_gpus[incoming.id] = {
-                gpu_id for victim in selected for gpu_id in victim.allocated_gpu_ids
-            }
+            self._preemption_reserved_gpus[incoming.id] = set(projected_placement)
             for victim in selected:
                 self._preemption_target_by_victim[victim.id] = incoming.id
         for victim in selected:

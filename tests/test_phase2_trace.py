@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pytest
 
+from gpu_scheduler_lab.cli import _gpu_memory_mapping
 from gpu_scheduler_lab.traces import AlibabaSpotGPUTraceAdapter, TraceFilter
 
 FIXTURE = Path("tests/fixtures/alibaba_trace_sample")
@@ -88,3 +90,9 @@ def test_alibaba_skip_invalid_handles_truncated_csv_row(tmp_path: Path) -> None:
 def test_alibaba_dataset_absence_is_a_local_error_not_an_import_failure(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="missing Alibaba trace files"):
         AlibabaSpotGPUTraceAdapter(tmp_path)
+
+
+@pytest.mark.parametrize("value", ["A10=nan", "A10=inf", "A10=-inf"])
+def test_gpu_memory_override_rejects_non_finite_values(value: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match="positive GB"):
+        _gpu_memory_mapping(value)

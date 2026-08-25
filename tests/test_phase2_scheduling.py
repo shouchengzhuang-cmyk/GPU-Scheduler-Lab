@@ -95,6 +95,21 @@ def test_checkpoint_victims_stay_suspended_until_incoming_job_starts() -> None:
     assert all(job.status is JobStatus.COMPLETED for job in result.jobs)
 
 
+def test_checkpoint_reservation_includes_already_free_incoming_gpu() -> None:
+    cluster = make_cluster([[24, 24]])
+    jobs = [
+        Job("victim", 0, 20, 1, 20, Priority.LOW, checkpoint_cost=2),
+        Job("incoming", 1, 1, 2, 20, Priority.HIGH, gang=True),
+        Job("peer", 1.5, 10, 1, 20, Priority.HIGH),
+    ]
+
+    result = Simulator(cluster, jobs, PreemptiveScheduler()).run()
+
+    assert _job(result, "incoming").first_start_time == 3
+    assert _job(result, "peer").first_start_time == 4
+    assert _job(result, "victim").preemption_count == 1
+
+
 def test_zero_cost_preemption_keeps_existing_resume_semantics() -> None:
     jobs = [
         Job("low", 0, 100, 1, 20, priority=Priority.LOW),

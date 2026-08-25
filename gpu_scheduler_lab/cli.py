@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -50,10 +51,11 @@ def _priority_weights(value: str) -> tuple[float, float, float, float]:
 def _gpu_memory_mapping(value: str) -> tuple[str, float]:
     try:
         model, raw_memory = value.rsplit("=", 1)
+        model = model.strip()
         memory = float(raw_memory)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("use MODEL=GB, for example GPU-series-1=24") from exc
-    if not model or memory <= 0:
+    if not model or not math.isfinite(memory) or memory <= 0:
         raise argparse.ArgumentTypeError("GPU memory mapping requires a model and positive GB")
     return model, memory
 
