@@ -87,3 +87,39 @@ Topology metrics 分类 same-node、same-rack、cross-rack、cross-zone，并对
 Experiment harness 使用 canonical scenario JSON 的 SHA256 证明各 scheduler 输入一致，并保存 Git SHA、Python version、trace source/version、seed、metrics 和聚合结果。manifest timestamp、Git SHA 与 wall-clock elapsed 不参与 deterministic result assertion。
 
 复杂度热路径：TopologyAware 只构造有限 domain 候选；Backfill 只在 blocked head 时复制一次 cluster；Preemptive 只在失败 placement 时构造 projected cluster。10k BinPack/Spread benchmark 继续作为稳定 regression baseline。
+
+## 12. Phase III separates admission, allocation, and placement
+
+Admission 在 Job arrival 时校验 queue、硬上限和物理上不可能满足的 GPU 请求。暂时忙碌不构成拒绝理由。Allocation policy 决定哪个 queue 和 Job 获得下一次机会，placement scheduler 决定 GPU ID。FairShareScheduler 通过组合 TopologyAware 实现这条边界，没有复制 placement 逻辑。
+
+Queue usage 同时向全部 ancestor 聚合。每个 allocation 记账 `gpu_units` 和请求显存，型号权重只作为 policy 输入，不代表硬件性能。Guarantee 是 entitlement，limit 是硬约束；超过 guarantee 的部分记为 borrowed usage。
+
+## 13. DRF and logical-time history
+
+Weighted DRF score 集中定义为：
+
+$$
+\frac{\max(U_{gpu}/C_{gpu}, U_{mem}/C_{mem})}{weight_q}
+$$
+
+历史 service 只使用 simulation logical time。一个长度为 $\Delta t$ 的区间结束时，旧 service 按 half-life 衰减，再加上该区间收到的 GPU service：
+
+$$
+H_q(t+\Delta t)=H_q(t)2^{-\Delta t/h}+r_q\Delta t
+$$
+
+同一 parent 下，`fairshare_debt` 等于 queue 的 `historical_service / weight` 减去 sibling 中的最小值。正数表示历史上收到过更多服务，调度顺序会暂时后移；负 debt 不在当前基线中出现，最欠服务的 sibling 为 0。
+
+## 14. Reclaim reuses preemption fencing
+
+Reclaim 和 priority preemption 使用同一个 projected-placement state machine，trace 的 structured reason 区分 `PREEMPT_PRIORITY`、`PREEMPT_RECLAIM` 与 `PREEMPT_CAPACITY_REVOKE`。Reclaim victim 必须来自别的 queue，且 allocation 确实含 borrowed units。Elastic allocation 会先缩到 min；仍不足时才 checkpoint 整个 victim。
+
+多 victim reclaim 先计算完整 incoming placement 并保留全部 GPU。先完成 checkpoint 的 victim 保持 suspended，incoming 启动后才回到 pending，其他 Job 看不到这部分 reservation。
+
+## 15. Elastic work and fleet events
+
+Fixed Job 继续使用 duration。Elastic Job 的 total work 是 `duration * preferred_replicas`，实际速率是 `replicas * configured_efficiency`。Resize 先结算当前 work，再原子更新 GPU ownership、增加 generation 并重排 completion，旧 event 无法提前完成 Job。
+
+同一时间戳的顺序固定为 completion、checkpoint completion、restart completion、capacity addition/recovery、capacity drain/failure/revoke、Job arrival、scheduler tick。Drain 后现有 Job 继续运行；fail 和 revoke 立即使 allocation 失效。Recovery 模型保留已完成 work，并加 configured restart cost。真实故障可能丢失最近 durable checkpoint 之后的工作，simulator 没有验证这部分。
+
+Dynamic fleet 的 utilization denominator 按事件区间积分 active capacity，不使用 simulation 结束时的单一容量回算整个 horizon。

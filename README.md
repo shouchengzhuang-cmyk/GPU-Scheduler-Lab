@@ -1,6 +1,6 @@
 # GPU Scheduler Lab
 
-GPU Scheduler Lab 是一个可复现、可测试、可 benchmark 的 GPU 集群离散事件调度模拟器。MVP 用 synthetic workload 比较基础策略；Phase II 增加生产 trace replay、异构 GPU 型号、层级拓扑、reservation/backfill、抢占开销和可复现实验 manifest。
+GPU Scheduler Lab 是一个可复现、可测试、可 benchmark 的 GPU 集群离散事件调度模拟器。MVP 用 synthetic workload 比较基础策略；Phase II 增加生产 trace replay、异构 GPU 型号、层级拓扑、reservation/backfill、抢占开销和可复现实验 manifest；Phase III 加入多租户队列、公平分配、跨队列 reclaim、弹性 gang 和动态 fleet。
 
 它是调度算法实验室，不连接真实 NVIDIA GPU、CUDA 或 Kubernetes，也不是生产调度器。
 
@@ -31,7 +31,12 @@ Synthetic / Production Trace / Mini-AI-Cloud Snapshot
 
 模型中的 GPU 是独占设备。一个作业占用 GPU 后，其他作业不能共享该设备；`gpu_memory_gb` 用于容量约束和显存浪费计量。所有多 GPU placement 都是原子的，`gang: true` 进一步启用跨节点 gang 指标。
 
-Phase II 继续复用唯一的 `Scenario -> Simulator -> Scheduler -> Metrics` 路径。Trace adapter 只负责 normalization，simulation engine 不读取 Alibaba-specific schema。
+所有阶段复用唯一的 `Scenario -> Simulator -> Scheduler -> Metrics` 路径。Phase III 在 placement 前增加 admission 和 allocation policy，但 GPU 选择仍由已有 scheduler 完成。Trace adapter 只负责 normalization，simulation engine 不读取 Alibaba-specific schema。
+
+```text
+Submission -> Admission -> Queue / Fair Share -> Allocation / Reclaim
+           -> Placement -> Dynamic Fleet -> Trace / Metrics
+```
 
 ## Quick start (Ubuntu / WSL)
 
@@ -140,6 +145,18 @@ victim score 考虑优先级、适配 GPU、collateral GPU、剩余 runtime、ch
 
 请求 $k$ 张 GPU 的作业只有在完整 placement 存在时才一次性获取 $k$ 张，否则获取 0 张。支持跨 Node，trace 和 `cross_node_gang_placement_count` 会暴露跨节点 gang；不模拟 NCCL、NVLink 或通信成本。
 
+### Multi-tenant fair share
+
+`drf`、`historical-drf`、`fairshare-no-borrow`、`fairshare-borrow` 和 `fairshare-reclaim` 先按队列 entitlement、dominant share、历史 service、优先级与稳定 Job ID 排序，再把 placement 委托给 TopologyAware。队列 guarantee 是可借用的 entitlement，limit 是不能越过的硬上限；ancestor limit 同样约束全部后代。
+
+`fairshare-reclaim` 只从带有 borrowed usage 的 allocation 选择 victim。它复用 priority preemption 的 checkpoint、完整 projected placement reservation、suspended victim 和 `run_generation` fencing，不另建一套状态机。
+
+### Elastic gang and dynamic fleet
+
+Elastic Job 以 `min_replicas` 原子启动，向 `preferred_replicas` 保守扩容。总 work 定义为 `duration * preferred_replicas`，在 $k$ 个 replica 上的速率为 `k * efficiency(k)`；没有显式曲线时效率为 1。这个模型只表达用户配置的理想化 scaling，不代表真实 distributed training 效率。
+
+Fleet event 支持 `NODE_JOIN`、`NODE_DRAIN`、`NODE_FAIL`、`NODE_RECOVER`、`CAPACITY_REVOKE` 和 `CAPACITY_RETURN`。Drain 只阻止新 placement；fail 和 revoke 会使受影响 Job 进入 recovery，并按乐观模型保留已经完成的 productive work。
+
 ## Metrics
 
 Cluster metrics 包括平均/峰值 GPU utilization、GPU memory utilization、Node utilization、idle GPU time，以及下述 count/memory fragmentation。Job metrics 包括 wait、turnaround、completion、preemption 和 SLA；Scheduling metrics 还包括 topology placement/distance、reservation/backfill 保证和 checkpoint/restart overhead。Cluster 同时保留 physical capacity 和 schedulable capacity；默认只用 `schedulable: true` 的 Node/GPU 作为分母，cordoned Node 不产生虚假 idle capacity。
@@ -190,7 +207,7 @@ $$
 
 - 所有 arrival/completion 都由 `heapq` 驱动的逻辑时钟处理；
 - scheduler 内部 aging-only tick 不进入 material workload horizon；
-- 同一时刻按 completion、checkpoint-complete、restart-complete、arrival、aging tick 排序，再执行 scheduling；
+- 同一时刻按 completion、checkpoint-complete、restart-complete、capacity add/recover、capacity loss/drain、arrival、aging tick 排序，再执行 scheduling；
 - placement、pending order 和 victim order 都有稳定决胜字段；
 - synthetic generator 使用局部 `random.Random(seed)`；
 - `compare` 对同一个不可变 scenario 分别重建状态，不会串用上一策略的 allocation。
@@ -237,7 +254,7 @@ Phase II 双策略 simulation 段 wall time 为 19.070 s；含 Python 启动、w
 
 GitHub Actions 在 Ubuntu + Python 3.12 上执行同样四项检查，不需要 GPU 或外部服务。
 
-Phase II smoke 还会运行 topology scenario、backfill scenario 和 Alibaba fixture import；CI 不访问完整数据集。
+CI 还会运行 topology、backfill、Alibaba fixture，以及 Phase III borrowing/reclaim、historical fair-share、elastic gang 和 revocable fleet smoke；它不访问完整数据集。
 
 ## Limitations
 
@@ -250,8 +267,11 @@ Phase II smoke 还会运行 topology scenario、backfill scenario 和 Alibaba fi
 - Kubernetes device plugin、scheduler plugin 或 production scheduler behavior；
 - vLLM inference throughput、TTFT、TP/PP 性能；
 - Mini-AI-Cloud 的 PostgreSQL transaction、lease、fencing 或 runtime lifecycle。
+- 真实 elastic training scaling、CUDA checkpoint throughput 或 Spot interruption probability；
+- Alibaba 的真实 tenant hierarchy。Synthetic tenant overlay 会明确写入 `tenant_assignment: synthetic_overlay`。
 
 Wall-clock benchmark 只衡量本机 Python 事件循环和策略实现，不能外推真实集群吞吐。
 
 详细设计见 [docs/design.md](docs/design.md)。
 Phase II 架构、复杂度与证据边界见 [docs/phase2.md](docs/phase2.md)。
+Phase III 设计和可运行场景见 [docs/phase3.md](docs/phase3.md) 与 [docs/multi-tenant-scheduling.md](docs/multi-tenant-scheduling.md)。
