@@ -16,12 +16,11 @@ public_trace_study:
   normalization:
     gpu_memory_gb:
       A10: 24
-      A100-SXM4-40GB: 40
       A100-SXM4-80GB: 80
-      H100-80GB: 80
-      V100M16: 16
-      V100M32: 32
+      A800-SXM4-80GB: 80
+      H800: 80
     exclusions:
+      - GPU-series-1 and GPU-series-2 are anonymized upstream labels with no auditable memory capacity mapping and are excluded
       - fractional GPU requests are outside this integer-GPU simulator
       - GPU models without an explicit, auditable memory mapping are excluded
       - rows failing required numeric or categorical validation are excluded
@@ -48,6 +47,6 @@ public_trace_study:
       - guaranteed_gpu_units
   claims:
     - The pinned upstream README and source CSVs are downloaded in full and verified by SHA-256.
-    - Replay windows are deterministic bounded samples from the eligible source rows.
+    - Replay windows are deterministic bounded samples from eligible source rows after explicit exclusions.
     - Tenant queue guarantees are synthetic experiment controls, not Alibaba trace fields.
     - Results are discrete-event simulation evidence, not real-GPU or production measurements.
