@@ -14,6 +14,16 @@ on:
       - gpu_scheduler_lab/traces/**
       - gpu_scheduler_lab/schedulers/**
       - gpu_scheduler_lab/simulator/**
+  pull_request:
+    paths:
+      - .github/workflows/public-trace-study.yml
+      - docs/public-trace-study.md
+      - scripts/download_trace.py
+      - scripts/run_public_trace_study.py
+      - study/public-trace-study.yaml
+      - gpu_scheduler_lab/traces/**
+      - gpu_scheduler_lab/schedulers/**
+      - gpu_scheduler_lab/simulator/**
 
 permissions:
   contents: read
