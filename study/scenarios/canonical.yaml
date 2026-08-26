@@ -16,6 +16,7 @@ scenario:
     gang_probability: 0.35
     sla_probability: 0.5
     tenant_count: 4
+    elastic_ratio: 0.2
   controls:
     gpu_model_mix: balanced
     topology_strictness: rack

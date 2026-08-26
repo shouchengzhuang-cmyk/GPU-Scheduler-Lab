@@ -35,6 +35,7 @@ FORMAL_VARIABLE_IDS = (
     "checkpoint-restart-cost",
     "revocable-capacity-ratio",
 )
+ABLATION_IDS = ("topology", "history", "reclaim", "elastic")
 IMPLEMENTED_SCHEDULERS = {
     "binpack",
     "topology",
@@ -88,6 +89,12 @@ class StudyConfig:
     variables: tuple[StudyVariable, ...]
     hypotheses: tuple[Hypothesis, ...]
     seeds: tuple[int, ...]
+    grid_mode: str
+    warmup_runs: int
+    replications_per_seed: int
+    max_retries: int
+    resume: bool
+    ablations: tuple[str, ...]
     scenario_path: Path
     output_directory: Path
     source_path: Path
@@ -95,7 +102,7 @@ class StudyConfig:
     @classmethod
     def load(cls, path: Path) -> StudyConfig:
         source_path = path.resolve()
-        root = _load_mapping(source_path, "study config")
+        root = _load_study_mapping(source_path)
         _require_keys(
             root,
             {
@@ -175,7 +182,20 @@ class StudyConfig:
                 raise ValueError(f"missing study document: {document}")
 
         execution = _required_mapping(root, "execution", "study config")
-        _require_keys(execution, {"seeds", "output_directory"}, "execution")
+        _require_keys(
+            execution,
+            {
+                "seeds",
+                "output_directory",
+                "grid_mode",
+                "warmup_runs",
+                "replications_per_seed",
+                "max_retries",
+                "resume",
+                "ablations",
+            },
+            "execution",
+        )
         raw_seeds = execution.get("seeds")
         if not isinstance(raw_seeds, list) or not raw_seeds:
             raise ValueError("execution.seeds must be a non-empty list")
@@ -183,6 +203,18 @@ class StudyConfig:
             raise ValueError("execution.seeds must contain integers")
         seeds = tuple(raw_seeds)
         _require_unique("seed", (str(seed) for seed in seeds))
+        grid_mode = _required_string(execution, "grid_mode", "execution")
+        if grid_mode not in {"one-at-a-time", "cartesian"}:
+            raise ValueError("execution.grid_mode must be one-at-a-time or cartesian")
+        warmup_runs = _required_integer(execution, "warmup_runs", minimum=0)
+        replications_per_seed = _required_integer(execution, "replications_per_seed", minimum=1)
+        max_retries = _required_integer(execution, "max_retries", minimum=0)
+        resume = execution.get("resume")
+        if not isinstance(resume, bool):
+            raise ValueError("execution.resume must be a boolean")
+        ablations = _string_tuple(execution.get("ablations"), "execution.ablations")
+        _require_unique("ablation", ablations)
+        _require_known("ablation", ablations, set(ABLATION_IDS))
         output_directory = _resolve_reference(
             source_path.parent,
             _required_string(execution, "output_directory", "execution"),
@@ -198,6 +230,12 @@ class StudyConfig:
             variables=variables,
             hypotheses=hypotheses,
             seeds=seeds,
+            grid_mode=grid_mode,
+            warmup_runs=warmup_runs,
+            replications_per_seed=replications_per_seed,
+            max_retries=max_retries,
+            resume=resume,
+            ablations=ablations,
             scenario_path=scenario_path,
             output_directory=output_directory,
             source_path=source_path,
@@ -209,6 +247,25 @@ class StudyConfig:
                 return policy
         allowed = ", ".join(policy.id for policy in self.policies)
         raise ValueError(f"policy {policy_id!r} is not registered for study {self.id!r}: {allowed}")
+
+
+def _load_study_mapping(path: Path) -> dict[str, Any]:
+    root = _load_mapping(path, "study config")
+    if "extends" not in root:
+        return root
+    _require_keys(root, {"extends", "scenario", "execution"}, "study fixture overlay")
+    base_path = _resolve_reference(
+        path.parent,
+        _required_string(root, "extends", "study fixture overlay"),
+    )
+    base = _load_mapping(base_path, "base study config")
+    if "extends" in base:
+        raise ValueError("nested study fixture overlays are not supported")
+    policy_registry = _required_string(base, "policy_registry", "base study config")
+    base["policy_registry"] = str(_resolve_reference(base_path.parent, policy_registry))
+    base["scenario"] = root["scenario"]
+    base["execution"] = root["execution"]
+    return base
 
 
 def _load_mapping(path: Path, label: str) -> dict[str, Any]:
@@ -233,6 +290,13 @@ def _required_string(payload: dict[str, Any], key: str, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label}.{key} must be a non-empty string")
     return value.strip()
+
+
+def _required_integer(payload: dict[str, Any], key: str, *, minimum: int) -> int:
+    value = payload.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        raise ValueError(f"execution.{key} must be an integer >= {minimum}")
+    return value
 
 
 def _require_keys(payload: dict[str, Any], expected: set[str], label: str) -> None:

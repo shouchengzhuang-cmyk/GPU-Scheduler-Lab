@@ -1,4 +1,5 @@
 from gpu_scheduler_lab.study.config import (
+    ABLATION_IDS,
     FORMAL_METRIC_IDS,
     FORMAL_POLICY_IDS,
     FORMAL_VARIABLE_IDS,
@@ -10,6 +11,7 @@ from gpu_scheduler_lab.study.config import (
 )
 
 __all__ = [
+    "ABLATION_IDS",
     "FORMAL_METRIC_IDS",
     "FORMAL_POLICY_IDS",
     "FORMAL_VARIABLE_IDS",

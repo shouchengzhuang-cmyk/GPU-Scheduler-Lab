@@ -1,0 +1,25 @@
+schema_version: "1.0.0"
+scenario:
+  id: small-study-ci-fixture
+  description: Small deterministic scenario used to exercise the complete study runner in CI.
+  generator:
+    profile: mixed
+    jobs: 24
+    nodes: 4
+    gpus_per_node: 4
+    arrival_rate: 1.0
+    median_duration: 12.0
+    duration_distribution: fixed
+    training_ratio: 0.35
+    gang_probability: 0.25
+    sla_probability: 0.5
+    tenant_count: 4
+    elastic_ratio: 0.2
+  controls:
+    gpu_model_mix: balanced
+    topology_strictness: rack
+    checkpoint_restart_cost: 2.0
+    revocable_capacity_ratio: 0.25
+  limitations:
+    - The fixture validates orchestration and determinism, not a research conclusion.
+    - Its sample size is intentionally too small for portfolio claims.
