@@ -13,6 +13,7 @@ from gpu_scheduler_lab.scenario import Scenario, load_scenario, write_scenario
 from gpu_scheduler_lab.schedulers import create_scheduler
 from gpu_scheduler_lab.simulator.engine import SimulationResult, Simulator
 from gpu_scheduler_lab.study import StudyConfig
+from gpu_scheduler_lab.study.report import generate_study_report, verify_hash_manifest
 from gpu_scheduler_lab.study.runner import run_study
 from gpu_scheduler_lab.traces import AlibabaSpotGPUTraceAdapter, TraceFilter
 from gpu_scheduler_lab.visualization import plot_comparison, plot_timeline
@@ -244,6 +245,21 @@ def _study_run(args: argparse.Namespace) -> None:
     )
 
 
+def _study_report(args: argparse.Namespace) -> None:
+    artifacts = generate_study_report(args.input)
+    print(
+        f"Study report: {artifacts.report}\n"
+        f"Tables: {len(artifacts.tables)}\n"
+        f"Figures: {len(artifacts.figures)}\n"
+        f"Hashes: {artifacts.hashes}"
+    )
+
+
+def _study_verify(args: argparse.Namespace) -> None:
+    count = verify_hash_manifest(args.input)
+    print(f"Verified {count} study artifacts: {args.input / 'hashes.sha256'}")
+
+
 def _add_output_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-dir", type=Path, default=Path("results"))
     parser.add_argument("--no-charts", action="store_true")
@@ -347,6 +363,14 @@ def build_parser() -> argparse.ArgumentParser:
     study_run = study_commands.add_parser("run", help="run sensitivity and ablation plans")
     study_run.add_argument("--config", type=Path, required=True)
     study_run.set_defaults(handler=_study_run)
+    study_report = study_commands.add_parser(
+        "report", help="generate audited tables, figures, report, and hashes"
+    )
+    study_report.add_argument("--input", type=Path, required=True)
+    study_report.set_defaults(handler=_study_report)
+    study_verify = study_commands.add_parser("verify", help="verify every hashed study artifact")
+    study_verify.add_argument("--input", type=Path, required=True)
+    study_verify.set_defaults(handler=_study_verify)
     return parser
 
 

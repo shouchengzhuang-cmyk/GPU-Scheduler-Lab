@@ -33,6 +33,15 @@ jobs:
           set -Eeuo pipefail
           python -m gpu_scheduler_lab study run --config study/study-small.yaml
           python -m gpu_scheduler_lab study run --config study/study-small.yaml
+          python -m gpu_scheduler_lab study report --input build/study/small
+          python -m gpu_scheduler_lab study verify --input build/study/small
+      - name: Upload small study report bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: canonical-study-small-${{ github.sha }}
+          path: build/study/small
+          if-no-files-found: error
+          retention-days: 14
       - name: Pytest
         run: pytest
       - name: Build and install wheel
