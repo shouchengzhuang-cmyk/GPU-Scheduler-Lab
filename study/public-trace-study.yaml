@@ -1,0 +1,48 @@
+schema_version: "1.0.0"
+public_trace_study:
+  id: alibaba-spot-gpu-public-trace-v1
+  title: Alibaba spot-GPU full-source bounded-window replay
+  evidence_kind: SIMULATED_TRACE_REPLAY
+  dataset:
+    name: Alibaba Cluster Trace Program
+    version: cluster-trace-v2026-spot-gpu
+    source_url: https://github.com/alibaba/clusterdata/tree/master/cluster-trace-v2026-spot-gpu
+    required_files:
+      - node_info_df.csv
+      - job_info_df.csv
+      - source-manifest.json
+  normalization:
+    gpu_memory_gb:
+      A10: 24
+      A100-SXM4-80GB: 80
+      A800-SXM4-80GB: 80
+    exclusions:
+      - fractional GPU requests are outside this integer-GPU simulator
+      - GPU models without an explicit, auditable memory mapping are excluded
+      - rows failing required numeric or categorical validation are excluded
+  replay:
+    seed: 20260826
+    window_duration_seconds: 86400
+    window_quantiles: [0.0, 0.5, 0.9]
+    max_nodes_per_window: 500
+    max_jobs_per_window: 2000
+    policies:
+      - fifo
+      - binpack
+      - historical-drf
+      - fairshare-reclaim
+  tenant_overlay:
+    source_identity_field: organization
+    queue_strategy: one queue per source organization
+    guarantee_strategy: equal GPU-unit share of replay cluster
+    borrowing_enabled: true
+    reclaimable: true
+    synthetic_fields:
+      - queue_id
+      - queue_weight
+      - guaranteed_gpu_units
+  claims:
+    - The source files are downloaded in full and verified by SHA-256 before preprocessing.
+    - Replay windows are deterministic bounded samples from the eligible source rows.
+    - Tenant queue guarantees are synthetic experiment controls, not Alibaba trace fields.
+    - Results are discrete-event simulation evidence, not real-GPU or production measurements.
