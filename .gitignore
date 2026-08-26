@@ -9,5 +9,7 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+.data/
 results/
+experiment-results/
 *.generated.yaml

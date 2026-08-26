@@ -23,7 +23,7 @@ def test_seeded_workload_is_reproducible() -> None:
 
 
 def test_profiles_generate_requested_job_count() -> None:
-    for profile in ("mixed", "fragmentation", "burst"):
+    for profile in ("mixed", "fragmentation", "burst", "topology", "backfill"):
         scenario = generate_scenario(GeneratorConfig(job_count=17, seed=7, profile=profile))
         assert len(scenario.jobs) == 17
 

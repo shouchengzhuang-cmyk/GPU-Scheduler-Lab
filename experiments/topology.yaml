@@ -1,0 +1,9 @@
+experiment:
+  name: topology-comparison
+workload:
+  type: scenario
+  scenario: scenarios/topology.yaml
+schedulers: [spread, topology]
+seeds: [1]
+output:
+  directory: experiment-results/topology

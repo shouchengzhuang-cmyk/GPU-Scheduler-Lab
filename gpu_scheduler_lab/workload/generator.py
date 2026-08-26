@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from gpu_scheduler_lab.models.cluster import GPU, Cluster, Node
 from gpu_scheduler_lab.models.job import Job, JobType, Priority
+from gpu_scheduler_lab.models.topology import TopologyMode
 from gpu_scheduler_lab.scenario import Scenario
 
 
@@ -66,8 +67,8 @@ class GeneratorConfig:
         ):
             if not 0 <= value <= 1:
                 raise ValueError(f"{name} must be between 0 and 1")
-        if self.profile not in {"mixed", "fragmentation", "burst"}:
-            raise ValueError("profile must be mixed, fragmentation, or burst")
+        if self.profile not in {"mixed", "fragmentation", "burst", "topology", "backfill"}:
+            raise ValueError("profile must be mixed, fragmentation, burst, topology, or backfill")
 
     @property
     def resolved_priority_weights(self) -> tuple[float, float, float, float]:
@@ -80,6 +81,7 @@ class GeneratorConfig:
 
 def _cluster(config: GeneratorConfig) -> Cluster:
     capacities = (24.0, 40.0, 80.0)
+    models = ("A10", "A100-40GB", "A100-80GB")
     nodes = []
     for node_index in range(config.node_count):
         node_id = f"node-{node_index:03d}"
@@ -87,12 +89,16 @@ def _cluster(config: GeneratorConfig) -> Cluster:
         nodes.append(
             Node(
                 id=node_id,
-                topology={"rack": f"rack-{node_index // 10:02d}"},
+                topology={
+                    "zone": f"zone-{node_index // 20:02d}",
+                    "rack": f"rack-{node_index // 5:02d}",
+                },
                 gpus=[
                     GPU(
                         id=f"{node_id}-gpu-{gpu_index}",
                         node_id=node_id,
                         memory_capacity_gb=memory,
+                        model=models[node_index % len(models)],
                     )
                     for gpu_index in range(config.gpus_per_node)
                 ],
@@ -107,6 +113,8 @@ def _arrival(rng: random.Random, config: GeneratorConfig, index: int, previous: 
     if config.profile == "burst":
         burst = index // 100
         return burst * 20.0 + rng.random() * 1.5
+    if config.profile == "backfill":
+        return float(index // 12) * 10.0 + rng.random()
     return previous + rng.expovariate(config.arrival_rate)
 
 
@@ -120,7 +128,7 @@ def generate_scenario(config: GeneratorConfig) -> Scenario:
         if config.gpu_memory_distribution is not None:
             memory_values, memory_weights = zip(*config.gpu_memory_distribution, strict=True)
             memory = rng.choices(memory_values, memory_weights)[0]
-        elif config.profile == "fragmentation":
+        elif config.profile in {"fragmentation", "topology"}:
             memory = rng.choices((10.0, 20.0, 23.0, 38.0, 70.0), (10, 25, 25, 20, 20))[0]
         elif config.profile == "burst":
             memory = rng.choices((8.0, 12.0, 20.0), (30, 45, 25))[0]
@@ -132,6 +140,13 @@ def generate_scenario(config: GeneratorConfig) -> Scenario:
             gpu_count = rng.choices(count_values, count_weights)[0]
         elif config.profile == "fragmentation":
             gpu_count = rng.choices((1, 2, 4, 8), (45, 25, 20, 10))[0]
+        elif config.profile == "topology":
+            gpu_count = rng.choices((2, 4, 8, 16), (20, 35, 35, 10))[0]
+        elif config.profile == "backfill":
+            gpu_count = min(
+                config.node_count * config.gpus_per_node,
+                config.gpus_per_node * 2 if index % 20 == 0 else rng.choice((1, 1, 2)),
+            )
         elif config.profile == "burst":
             gpu_count = rng.choices((1, 2, 4), (78, 18, 4))[0]
         else:
@@ -148,7 +163,14 @@ def generate_scenario(config: GeneratorConfig) -> Scenario:
             sampled_duration = rng.lognormvariate(
                 math.log(config.median_duration), config.duration_sigma
             )
-        duration = max(1.0, sampled_duration * (2.0 if training else 0.45))
+        if config.profile == "backfill":
+            duration = (
+                config.median_duration * 4
+                if index % 20 == 0
+                else max(1.0, config.median_duration * 0.15)
+            )
+        else:
+            duration = max(1.0, sampled_duration * (2.0 if training else 0.45))
         priority = rng.choices(
             (Priority.LOW, Priority.NORMAL, Priority.HIGH, Priority.CRITICAL),
             config.resolved_priority_weights,
@@ -156,6 +178,21 @@ def generate_scenario(config: GeneratorConfig) -> Scenario:
         sla_deadline = None
         if rng.random() < config.sla_probability:
             sla_deadline = arrival + duration * rng.uniform(1.15, 2.5)
+        topology_mode = TopologyMode.NONE
+        gpu_model: str | None = None
+        allowed_gpu_models: tuple[str, ...] = ()
+        if config.profile == "topology":
+            topology_mode = rng.choice(
+                (
+                    TopologyMode.PREFER_SAME_NODE,
+                    TopologyMode.PREFER_SAME_RACK,
+                    TopologyMode.REQUIRE_SAME_RACK,
+                )
+            )
+            if memory > 40:
+                gpu_model = "A100-80GB"
+            elif memory > 24:
+                allowed_gpu_models = ("A100-40GB", "A100-80GB")
         jobs.append(
             Job(
                 id=f"{config.profile}-{index:05d}",
@@ -168,6 +205,9 @@ def generate_scenario(config: GeneratorConfig) -> Scenario:
                 gang=training or rng.random() < config.gang_probability,
                 sla_deadline=sla_deadline,
                 group="training" if training else "inference",
+                gpu_model=gpu_model,
+                allowed_gpu_models=allowed_gpu_models,
+                topology_mode=topology_mode,
             )
         )
     return Scenario(

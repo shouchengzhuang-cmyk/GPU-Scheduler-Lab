@@ -26,6 +26,13 @@ def build_metrics(
     scheduling_attempts: int,
     failed_attempts: int,
     cross_node_gang_placements: int,
+    same_node_gang_placements: int,
+    same_rack_gang_placements: int,
+    cross_rack_gang_placements: int,
+    cross_zone_gang_placements: int,
+    topology_distance_sum: float,
+    topology_distance_samples: int,
+    topology_requirement_violations: int,
 ) -> dict[str, Any]:
     completed = [job for job in jobs if job.status is JobStatus.COMPLETED]
     waits = [value for job in completed if (value := job.waiting_time) is not None]
@@ -36,6 +43,11 @@ def build_metrics(
         for job in sla_jobs
     )
     preemptions = sum(job.preemption_count for job in jobs)
+    checkpoint_overhead = sum(job.checkpoint_overhead for job in jobs)
+    restart_overhead = sum(job.restart_overhead for job in jobs)
+    wasted_productive_gpu_time = sum(
+        (job.checkpoint_overhead + job.restart_overhead) * job.gpu_count for job in jobs
+    )
 
     demand_by_group: dict[str, float] = defaultdict(float)
     completed_by_group: dict[str, float] = defaultdict(float)
@@ -95,6 +107,21 @@ def build_metrics(
         "sla_violation_rate": sla_violations / len(sla_jobs) if sla_jobs else 0.0,
         "sla_job_count": len(sla_jobs),
         "cross_node_gang_placement_count": cross_node_gang_placements,
+        "same_node_gang_placement_count": same_node_gang_placements,
+        "same_rack_gang_placement_count": same_rack_gang_placements,
+        "cross_rack_gang_placement_count": cross_rack_gang_placements,
+        "cross_zone_gang_placement_count": cross_zone_gang_placements,
+        "average_topology_distance": (
+            topology_distance_sum / topology_distance_samples if topology_distance_samples else 0.0
+        ),
+        "topology_requirement_violation_count": topology_requirement_violations,
+        "total_checkpoint_overhead": checkpoint_overhead,
+        "total_restart_overhead": restart_overhead,
+        "preemption_overhead_ratio": (
+            wasted_productive_gpu_time / busy_gpu_time if busy_gpu_time else 0.0
+        ),
+        "wasted_productive_gpu_time": wasted_productive_gpu_time,
+        "resumed_job_count": sum(job.preemption_count > 0 for job in completed),
         "scheduling_attempt_count": scheduling_attempts,
         "failed_placement_attempt_count": failed_attempts,
         "jains_fairness_index": jains_fairness_index(service_qualities),

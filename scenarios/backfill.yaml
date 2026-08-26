@@ -1,0 +1,44 @@
+metadata:
+  description: Conservative reservation allows a short job without delaying a large gang
+  seed: 0
+nodes:
+  - id: node-a
+    topology: {zone: zone-1, rack: rack-1}
+    gpus:
+      - {id: a-0, model: A10, memory_gb: 24}
+      - {id: a-1, model: A10, memory_gb: 24}
+      - {id: a-2, model: A10, memory_gb: 24}
+      - {id: a-3, model: A10, memory_gb: 24}
+jobs:
+  - id: a-blocker
+    arrival_time: 0
+    duration: 10
+    gpu_count: 3
+    gpu_memory_gb: 20
+    priority: normal
+    type: training
+    gang: true
+  - id: b-reserved
+    arrival_time: 1
+    duration: 20
+    gpu_count: 4
+    gpu_memory_gb: 20
+    priority: normal
+    type: training
+    gang: true
+  - id: c-long-small
+    arrival_time: 1
+    duration: 8
+    gpu_count: 1
+    gpu_memory_gb: 20
+    priority: normal
+    type: inference
+    gang: false
+  - id: d-short-small
+    arrival_time: 1
+    duration: 2
+    gpu_count: 1
+    gpu_memory_gb: 20
+    priority: normal
+    type: inference
+    gang: false

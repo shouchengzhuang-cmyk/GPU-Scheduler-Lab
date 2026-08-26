@@ -42,7 +42,14 @@ def scenario_to_dict(scenario: Scenario) -> dict[str, Any]:
                 "id": node.id,
                 "schedulable": node.schedulable,
                 "topology": node.topology,
-                "gpus": [{"id": gpu.id, "memory_gb": gpu.memory_capacity_gb} for gpu in node.gpus],
+                "gpus": [
+                    {
+                        "id": gpu.id,
+                        "model": gpu.model,
+                        "memory_gb": gpu.memory_capacity_gb,
+                    }
+                    for gpu in node.gpus
+                ],
             }
             for node in scenario.cluster.nodes
         ],
@@ -58,6 +65,20 @@ def scenario_to_dict(scenario: Scenario) -> dict[str, Any]:
                 "gang": job.gang,
                 **({"sla_deadline": job.sla_deadline} if job.sla_deadline is not None else {}),
                 **({"group": job.group} if job.group is not None else {}),
+                **({"gpu_model": job.gpu_model} if job.gpu_model is not None else {}),
+                **(
+                    {"allowed_gpu_models": list(job.allowed_gpu_models)}
+                    if job.allowed_gpu_models
+                    else {}
+                ),
+                **(
+                    {"topology_mode": job.topology_mode.value}
+                    if job.topology_mode.value != "none"
+                    else {}
+                ),
+                **({"checkpoint_cost": job.checkpoint_cost} if job.checkpoint_cost else {}),
+                **({"restart_cost": job.restart_cost} if job.restart_cost else {}),
+                **({"source_metadata": job.source_metadata} if job.source_metadata else {}),
             }
             for job in scenario.jobs
         ],

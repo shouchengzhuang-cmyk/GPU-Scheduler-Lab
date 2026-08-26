@@ -1,0 +1,5 @@
+job_name,organization,gpu_model,cpu_request,gpu_request,worker_num,submit_time,duration,job_type
+239255,13,A10,20,1,1,0,2764799,HP
+253689,13,A10,8,1,1,0,15897599,HP
+437260,57,A100-SXM4-80GB,15,1,16,9589663,41060,Spot
+437261,57,A100-SXM4-80GB,15,1,94,9589663,71718,Spot

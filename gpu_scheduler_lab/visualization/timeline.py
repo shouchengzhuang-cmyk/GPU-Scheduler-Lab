@@ -14,10 +14,14 @@ def _segments(trace: list[TraceRecord]) -> list[tuple[str, str, float, float]]:
     active: dict[tuple[str, str], float] = {}
     segments: list[tuple[str, str, float, float]] = []
     for record in trace:
-        if record.event in {EventType.JOB_START, EventType.JOB_RESUME}:
+        if record.event in {EventType.JOB_START, EventType.JOB_RESUME, EventType.JOB_RESTART}:
             for gpu_id in record.gpu_ids:
-                active[(record.job_id, gpu_id)] = record.time
-        elif record.event in {EventType.JOB_COMPLETE, EventType.JOB_PREEMPT}:
+                active.setdefault((record.job_id, gpu_id), record.time)
+        elif record.event in {
+            EventType.JOB_COMPLETE,
+            EventType.JOB_PREEMPT,
+            EventType.JOB_CHECKPOINT_COMPLETE,
+        }:
             for gpu_id in record.gpu_ids:
                 started = active.pop((record.job_id, gpu_id), None)
                 if started is not None:
