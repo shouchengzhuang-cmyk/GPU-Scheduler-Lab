@@ -9,12 +9,16 @@ from pathlib import Path
 
 DATASET = "Alibaba cluster-trace-v2026-spot-gpu"
 DATASET_VERSION = "cluster-trace-v2026-spot-gpu"
-SOURCE = "https://github.com/alibaba/clusterdata/tree/master/cluster-trace-v2026-spot-gpu"
-SOURCE_REF = "master"
-BASE_URL = (
-    "https://raw.githubusercontent.com/alibaba/clusterdata/master/cluster-trace-v2026-spot-gpu"
+SOURCE_REF = "c08f563115af39bad047353431bf745b4dee665c"
+SOURCE = (
+    "https://github.com/alibaba/clusterdata/tree/"
+    f"{SOURCE_REF}/cluster-trace-v2026-spot-gpu"
 )
-FILES = ("node_info_df.csv", "job_info_df.csv")
+BASE_URL = (
+    "https://raw.githubusercontent.com/alibaba/clusterdata/"
+    f"{SOURCE_REF}/cluster-trace-v2026-spot-gpu"
+)
+FILES = ("README.md", "node_info_df.csv", "job_info_df.csv")
 
 
 def main() -> None:
@@ -45,6 +49,10 @@ def main() -> None:
         "dataset_version": DATASET_VERSION,
         "source": SOURCE,
         "source_ref": SOURCE_REF,
+        "upstream_readme": f"{BASE_URL}/README.md",
+        "attribution_note": (
+            "Review the pinned upstream README and cited paper before reusing the dataset."
+        ),
         "downloaded_at": datetime.now(UTC).isoformat(),
         "hash_algorithm": "sha256",
         "files": downloaded,
@@ -54,7 +62,7 @@ def main() -> None:
     ) as handle:
         json.dump(manifest, handle, indent=2, sort_keys=True)
         handle.write("\n")
-    print(f"Downloaded trace to {args.output_dir}")
+    print(f"Downloaded pinned trace {DATASET_VERSION}@{SOURCE_REF} to {args.output_dir}")
 
 
 if __name__ == "__main__":
