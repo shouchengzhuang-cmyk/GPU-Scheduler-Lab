@@ -1,0 +1,17 @@
+experiment:
+  name: phase3-elastic
+workload:
+  type: scenario
+  scenario: scenarios/elastic-gang.yaml
+allocation_policy:
+  type: historical-drf
+  half_life: 300
+placement_scheduler:
+  type: topology
+queue_policy:
+  borrowing: true
+  reclaim: true
+  elastic: true
+seeds: [1]
+output:
+  directory: experiment-results/phase3-elastic

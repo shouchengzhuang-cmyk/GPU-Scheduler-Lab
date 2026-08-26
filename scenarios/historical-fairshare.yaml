@@ -1,0 +1,22 @@
+metadata:
+  name: historical-fairshare
+nodes:
+  - id: node-a
+    gpus:
+      - {id: gpu-0, memory_gb: 40}
+queues:
+  - id: tenant-a
+    parent: root
+    weight: 1
+    guaranteed: {gpu_units: 0}
+    limit: {gpu_units: 1}
+  - id: tenant-b
+    parent: root
+    weight: 1
+    guaranteed: {gpu_units: 0}
+    limit: {gpu_units: 1}
+fairshare: {half_life: 100, starvation_threshold: 20}
+jobs:
+  - {id: a-first, queue: tenant-a, arrival_time: 0, duration: 10, gpu_count: 1, gpu_memory_gb: 20}
+  - {id: a-second, queue: tenant-a, arrival_time: 0, duration: 5, gpu_count: 1, gpu_memory_gb: 20}
+  - {id: b-late, queue: tenant-b, arrival_time: 9, duration: 5, gpu_count: 1, gpu_memory_gb: 20}

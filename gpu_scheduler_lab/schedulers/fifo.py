@@ -16,6 +16,6 @@ class FIFOScheduler(Scheduler):
 
             return TopologyAwareScheduler().place(cluster, job)
         eligible = cluster.eligible_gpus(job)
-        if len(eligible) < job.gpu_count:
+        if len(eligible) < job.requested_gpu_count:
             return None
-        return [gpu.id for gpu in eligible[: job.gpu_count]]
+        return [gpu.id for gpu in eligible[: job.requested_gpu_count]]

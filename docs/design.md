@@ -48,7 +48,7 @@ Engine 对所有 placement 都要求原子性；gang flag 表示 workload 明确
 
 Count fragmentation 使用 Node partiality $4p(1-p)$ 的容量加权平均；Memory fragmentation 使用独占 GPU 上 stranded memory 的比例；综合指标取二者平均。详细公式、0/1 语义和局限见 README。
 
-Cluster 保留全部 physical Node/GPU inventory，同时暴露 schedulable Node/GPU/显存容量。utilization、idle time、Node utilization 和 fragmentation 都只以 schedulable capacity 为分母；`schedulable: false` 的 Node 仍可出现在输入快照中，但不会稀释实验指标。
+Cluster 把四种容量分开：physical capacity 是全部 Node/GPU inventory；potential capacity 是从当前状态沿 fleet event 时间线得到的可实现快照，admission 和 synthetic tenant overlay 都只使用单个共存快照，不会合并不同时间段的互斥 Node；schedulable capacity 是当前 available、schedulable 且含 GPU 的 Node，用于 placement、fair-share 与 fragmentation；active capacity 是全部 schedulable GPU 加上 draining Node 中仍被占用的 GPU，用于 utilization、idle time、memory、Node、stable/revocable 和 fleet timeline 的区间积分。`schedulable: false`、unavailable、零 GPU Worker 和已经排空的 draining Node 都不会稀释对应实验指标。
 
 ## 7. Determinism
 
@@ -87,3 +87,43 @@ Topology metrics 分类 same-node、same-rack、cross-rack、cross-zone，并对
 Experiment harness 使用 canonical scenario JSON 的 SHA256 证明各 scheduler 输入一致，并保存 Git SHA、Python version、trace source/version、seed、metrics 和聚合结果。manifest timestamp、Git SHA 与 wall-clock elapsed 不参与 deterministic result assertion。
 
 复杂度热路径：TopologyAware 只构造有限 domain 候选；Backfill 只在 blocked head 时复制一次 cluster；Preemptive 只在失败 placement 时构造 projected cluster。10k BinPack/Spread benchmark 继续作为稳定 regression baseline。
+
+## 12. Phase III separates admission, allocation, and placement
+
+Admission 在 Job arrival 时校验 queue、硬上限和物理上不可能满足的 GPU 请求。暂时忙碌不构成拒绝理由。Allocation policy 决定哪个 queue 和 Job 获得下一次机会，placement scheduler 决定 GPU ID。FairShareScheduler 通过组合 TopologyAware 实现这条边界，没有复制 placement 逻辑。
+
+Queue usage 同时向全部 ancestor 聚合。每个 allocation 记账 `gpu_units` 和请求显存，型号权重只作为 policy 输入，不代表硬件性能。Guarantee 是 entitlement，limit 是硬约束；超过 guarantee 的部分记为 borrowed usage。
+
+## 13. DRF and logical-time history
+
+Weighted DRF score 集中定义为：
+
+$$
+\frac{\max(U_{gpu}/C_{gpu}, U_{mem}/C_{mem})}{weight_q}
+$$
+
+历史 service 只使用 simulation logical time。设 $\lambda=\ln(2)/h$，在长度为 $\Delta t$ 的区间内 queue 以常数速率 $r_q$ 获得 GPU service，则旧 service 与区间内新增 service 使用同一连续衰减模型：
+
+$$
+H_q(t+\Delta t)=H_q(t)e^{-\lambda\Delta t}+r_q\frac{1-e^{-\lambda\Delta t}}{\lambda}
+$$
+
+因此，把没有速率变化的区间拆成多个 event interval 不会改变历史 service。
+
+同一 parent 下，`fairshare_debt` 等于 queue 的 `historical_service / weight` 减去 sibling 中的最小值。正数表示历史上收到过更多服务，调度顺序会暂时后移；负 debt 不在当前基线中出现，最欠服务的 sibling 为 0。
+
+## 14. Reclaim reuses preemption fencing
+
+Reclaim 和 priority preemption 使用同一个 projected-placement state machine，trace 的 structured reason 区分 `PREEMPT_PRIORITY`、`PREEMPT_RECLAIM` 与 `PREEMPT_CAPACITY_REVOKE`。Reclaim victim 必须来自层级边界另一侧且该 branch 高于自身 entitlement floor。Planner 在一个 projected transaction 中先尝试缩减 borrowed elastic replica，再按需 checkpoint 整个 victim；只有完整 incoming placement 已存在时才提交，不能留下无效的部分 shrink。
+
+多 victim reclaim 先计算完整 incoming placement 并保留全部 GPU。先完成 checkpoint 的 victim 保持 suspended，incoming 启动后才回到 pending，其他 Job 看不到这部分 reservation。
+
+## 15. Elastic work and fleet events
+
+Fixed Job 继续使用 duration。Elastic Job 的 total work 是 `duration * preferred_replicas`，实际速率是 `replicas * configured_efficiency`。Resize 先结算当前 work，再原子更新 GPU ownership、增加 generation 并重排 completion，旧 event 无法提前完成 Job。
+
+同一时间戳的顺序固定为 completion、checkpoint completion、restart completion、capacity addition/recovery、capacity drain/failure/revoke、Job arrival、scheduler tick。Drain 后现有 Job 继续运行；fail 和 revoke 立即使 allocation 失效。Recovery 模型保留已完成 work，并加 configured restart cost。真实故障可能丢失最近 durable checkpoint 之后的工作，simulator 没有验证这部分。
+
+Dynamic fleet 的 utilization denominator 按事件区间积分 active capacity，不使用 simulation 结束时的单一容量回算整个 horizon。
+
+Queue 的 `guaranteed_share_satisfaction` 同样按区间积分，但 denominator 只计 `min(guarantee, aggregate runnable demand)`。无 demand 的时间不惩罚 queue；没有 entitlement demand 时结果定义为 1。

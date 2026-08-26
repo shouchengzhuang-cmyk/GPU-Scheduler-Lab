@@ -33,6 +33,9 @@ def build_metrics(
     topology_distance_sum: float,
     topology_distance_samples: int,
     topology_requirement_violations: int,
+    gpu_capacity_time: float | None = None,
+    memory_capacity_time: float | None = None,
+    node_capacity_time: float | None = None,
 ) -> dict[str, Any]:
     completed = [job for job in jobs if job.status is JobStatus.COMPLETED]
     waits = [value for job in completed if (value := job.waiting_time) is not None]
@@ -74,9 +77,11 @@ def build_metrics(
         }
     service_qualities = [group["service_quality"] for group in fairness_groups.values()]
 
-    gpu_capacity_time = total_gpus * horizon
-    memory_capacity_time = total_memory_gb * horizon
-    node_capacity_time = node_count * horizon
+    gpu_capacity_time = total_gpus * horizon if gpu_capacity_time is None else gpu_capacity_time
+    memory_capacity_time = (
+        total_memory_gb * horizon if memory_capacity_time is None else memory_capacity_time
+    )
+    node_capacity_time = node_count * horizon if node_capacity_time is None else node_capacity_time
     average_gpu_utilization = busy_gpu_time / gpu_capacity_time if gpu_capacity_time else 0.0
     return {
         "average_gpu_utilization": average_gpu_utilization,

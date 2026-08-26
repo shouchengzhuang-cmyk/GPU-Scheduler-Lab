@@ -49,3 +49,11 @@ jobs:
           --max-jobs 2
           --gpu-memory GPU-series-1=24
           --output build/alibaba-sample.yaml
+      - name: Phase III borrowing and reclaim smoke
+        run: python -m gpu_scheduler_lab experiment --config experiments/phase3-borrow-reclaim.yaml
+      - name: Phase III historical fair-share smoke
+        run: python -m gpu_scheduler_lab experiment --config experiments/phase3-historical-fairshare.yaml
+      - name: Phase III elastic gang smoke
+        run: python -m gpu_scheduler_lab experiment --config experiments/phase3-elastic.yaml
+      - name: Phase III revocable fleet smoke
+        run: python -m gpu_scheduler_lab experiment --config experiments/phase3-revocable-fleet.yaml

@@ -15,6 +15,9 @@ class ExperimentConfig:
     seeds: tuple[int, ...]
     output_directory: Path
     source_path: Path
+    allocation_policy: dict[str, Any]
+    placement_scheduler: str | None
+    queue_policy: dict[str, Any]
 
     @classmethod
     def load(cls, path: Path) -> ExperimentConfig:
@@ -35,10 +38,31 @@ class ExperimentConfig:
         workload_type = str(workload.get("type", "scenario"))
         if workload_type not in {"scenario", "trace", "synthetic"}:
             raise ValueError("workload.type must be scenario, trace, or synthetic")
-        schedulers_raw = raw.get("schedulers", [])
-        if not isinstance(schedulers_raw, list) or not schedulers_raw:
-            raise ValueError("schedulers must be a non-empty list")
-        schedulers = tuple(str(value) for value in schedulers_raw)
+        allocation_policy = raw.get("allocation_policy", {})
+        placement_scheduler = raw.get("placement_scheduler")
+        queue_policy = raw.get("queue_policy", {})
+        if not isinstance(allocation_policy, dict) or not isinstance(queue_policy, dict):
+            raise ValueError("allocation_policy and queue_policy must be mappings")
+        if placement_scheduler is not None and not isinstance(placement_scheduler, dict | str):
+            raise ValueError("placement_scheduler must be a string or mapping")
+        schedulers_raw = raw.get("schedulers")
+        schedulers: tuple[str, ...]
+        if schedulers_raw is None:
+            policy_type = str(allocation_policy.get("type", "")).strip()
+            if not policy_type:
+                raise ValueError("schedulers or allocation_policy.type is required")
+            schedulers = (policy_type,)
+        else:
+            if not isinstance(schedulers_raw, list) or not schedulers_raw:
+                raise ValueError("schedulers must be a non-empty list")
+            schedulers = tuple(str(value) for value in schedulers_raw)
+        placement_name = (
+            str(placement_scheduler.get("type"))
+            if isinstance(placement_scheduler, dict)
+            else str(placement_scheduler)
+            if placement_scheduler is not None
+            else None
+        )
         seeds_raw = raw.get("seeds", [1])
         if not isinstance(seeds_raw, list) or not seeds_raw:
             raise ValueError("seeds must be a non-empty list")
@@ -53,4 +77,7 @@ class ExperimentConfig:
             seeds=seeds,
             output_directory=directory,
             source_path=path,
+            allocation_policy=dict(allocation_policy),
+            placement_scheduler=placement_name,
+            queue_policy=dict(queue_policy),
         )

@@ -1,0 +1,39 @@
+metadata:
+  name: elastic-gang
+nodes:
+  - id: stable
+    topology: {zone: z1, rack: r1}
+    gpus:
+      - {id: s0, memory_gb: 40}
+      - {id: s1, memory_gb: 40}
+      - {id: s2, memory_gb: 40}
+      - {id: s3, memory_gb: 40}
+  - id: joining
+    available: false
+    schedulable: false
+    topology: {zone: z1, rack: r2}
+    gpus:
+      - {id: j0, memory_gb: 40}
+      - {id: j1, memory_gb: 40}
+      - {id: j2, memory_gb: 40}
+      - {id: j3, memory_gb: 40}
+queues:
+  - id: training
+    parent: root
+    guaranteed: {gpu_units: 8}
+    limit: {gpu_units: 8}
+fleet_events:
+  - {time: 5, type: NODE_JOIN, node_id: joining}
+jobs:
+  - id: elastic-training
+    queue: training
+    arrival_time: 0
+    duration: 10
+    gpu_count: 8
+    gpu_memory_gb: 20
+    type: training
+    gang: true
+    elastic:
+      min_replicas: 4
+      preferred_replicas: 8
+      max_replicas: 8

@@ -16,7 +16,19 @@ from gpu_scheduler_lab.traces import AlibabaSpotGPUTraceAdapter, TraceFilter
 from gpu_scheduler_lab.visualization import plot_comparison, plot_timeline
 from gpu_scheduler_lab.workload import GeneratorConfig, generate_scenario
 
-SCHEDULERS = ("fifo", "binpack", "spread", "preemptive", "topology", "backfill")
+SCHEDULERS = (
+    "fifo",
+    "binpack",
+    "spread",
+    "preemptive",
+    "topology",
+    "backfill",
+    "drf",
+    "historical-drf",
+    "fairshare-no-borrow",
+    "fairshare-borrow",
+    "fairshare-reclaim",
+)
 
 
 def _weighted_ints(value: str) -> tuple[tuple[int, float], ...]:
@@ -61,7 +73,7 @@ def _gpu_memory_mapping(value: str) -> tuple[str, float]:
 
 
 def _run(scenario: Scenario, scheduler_name: str) -> SimulationResult:
-    return Simulator(scenario.cluster, scenario.jobs, create_scheduler(scheduler_name)).run()
+    return Simulator.from_scenario(scenario, create_scheduler(scheduler_name, scenario)).run()
 
 
 def _scalar_metrics(result: SimulationResult) -> dict[str, str | int | float]:
@@ -82,7 +94,7 @@ def _write_outputs(
         "results": [result.to_dict(include_trace=True) for result in results],
     }
     with json_path.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
+        json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
         handle.write("\n")
     rows = [{"scheduler": result.scheduler, **_scalar_metrics(result)} for result in results]
     fieldnames = (

@@ -24,10 +24,10 @@ class TopologyAwareScheduler(Scheduler):
             cluster.eligible_gpus(job),
             key=lambda gpu: (gpu.memory_capacity_gb - job.gpu_memory_gb, gpu.node_id, gpu.id),
         )
-        if len(eligible) < job.gpu_count:
+        if len(eligible) < job.requested_gpu_count:
             return None
         nodes = {node.id: node for node in cluster.schedulable_nodes}
-        candidates = self._candidate_placements(eligible, nodes, job.gpu_count)
+        candidates = self._candidate_placements(eligible, nodes, job.requested_gpu_count)
         topologies = {node_id: node.topology for node_id, node in nodes.items()}
         feasible = [
             placement

@@ -24,22 +24,22 @@ class SpreadScheduler(Scheduler):
             from gpu_scheduler_lab.schedulers.topology import TopologyAwareScheduler
 
             return TopologyAwareScheduler().place(cluster, job)
-        nodes = [node for node in cluster.nodes if node.schedulable]
+        nodes = list(cluster.schedulable_nodes)
         nodes.sort(key=lambda node: (node.occupied_gpu_count, node.id))
         available = {node.id: self._eligible(node, job) for node in nodes}
-        if sum(len(gpus) for gpus in available.values()) < job.gpu_count:
+        if sum(len(gpus) for gpus in available.values()) < job.requested_gpu_count:
             return None
 
         placement: list[str] = []
         index = 0
-        while len(placement) < job.gpu_count:
+        while len(placement) < job.requested_gpu_count:
             made_progress = False
             for node in nodes:
                 gpus = available[node.id]
                 if index < len(gpus):
                     placement.append(gpus[index].id)
                     made_progress = True
-                    if len(placement) == job.gpu_count:
+                    if len(placement) == job.requested_gpu_count:
                         return placement
             if not made_progress:
                 break

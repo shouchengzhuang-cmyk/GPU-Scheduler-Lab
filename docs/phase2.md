@@ -113,3 +113,5 @@ Trace-driven simulation 提供更真实的 workload 和 cluster evidence，仍�
 - Kubernetes、vLLM、MIG、MPS 或 GPU time-sharing。
 
 所有结论都必须写成“在该 trace normalization、Scenario 模型和 scheduler 配置下”。
+
+Phase III 没有替换这些能力。Topology、backfill 和 checkpoint fencing 继续作为 placement 与 reclaim 的底层机制，多租户语义见 [phase3.md](phase3.md)。

@@ -8,13 +8,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from gpu_scheduler_lab.allocation.allocator import FairShareScheduler
 from gpu_scheduler_lab.experiments.aggregation import aggregate_runs
 from gpu_scheduler_lab.experiments.config import ExperimentConfig
 from gpu_scheduler_lab.experiments.manifest import git_sha, python_version, scenario_hash
+from gpu_scheduler_lab.fleet.events import schedulable_node_snapshots
+from gpu_scheduler_lab.queues.hierarchy import QueueHierarchy
+from gpu_scheduler_lab.queues.model import QueueSpec, ResourceVector
 from gpu_scheduler_lab.scenario import Scenario, load_scenario
 from gpu_scheduler_lab.schedulers import create_scheduler
+from gpu_scheduler_lab.schedulers.base import Scheduler
 from gpu_scheduler_lab.simulator.engine import Simulator
 from gpu_scheduler_lab.visualization.experiment import plot_experiment_summary
+from gpu_scheduler_lab.visualization.phase3 import plot_phase3_timelines
 from gpu_scheduler_lab.workload import GeneratorConfig, generate_scenario
 
 
@@ -38,18 +44,22 @@ def run_experiment(config_path: Path) -> ExperimentArtifacts:
         scenario = _scenario_for_seed(config, seed)
         fingerprint = scenario_hash(scenario)
         for scheduler_name in config.schedulers:
+            scheduler = _scheduler_for_run(config, scheduler_name, scenario)
             result = Simulator(
                 scenario.cluster,
                 scenario.jobs,
-                create_scheduler(scheduler_name),
+                scheduler,
+                scenario=scenario,
             ).run()
+            result_payload = result.to_dict(include_trace=True)
+            result_payload.pop("metrics", None)
             runs.append(
                 {
                     "scheduler": scheduler_name,
                     "seed": seed,
                     "scenario_hash": fingerprint,
                     "metrics": result.metrics,
-                    "result": result.to_dict(include_trace=True),
+                    "result": result_payload,
                 }
             )
     summary = aggregate_runs(runs)
@@ -58,7 +68,7 @@ def run_experiment(config_path: Path) -> ExperimentArtifacts:
             "scheduler": run["scheduler"],
             "seed": run["seed"],
             "scenario_hash": run["scenario_hash"],
-            "metrics": run["metrics"],
+            "metrics": _manifest_metrics(run["metrics"]),
         }
         for run in runs
     ]
@@ -66,15 +76,19 @@ def run_experiment(config_path: Path) -> ExperimentArtifacts:
         json.dumps(
             {
                 "name": config.name,
-                "timestamp": timestamp,
                 "schedulers": config.schedulers,
                 "seeds": config.seeds,
+                "workload": config.workload,
+                "allocation_policy": config.allocation_policy,
+                "placement_scheduler": config.placement_scheduler,
+                "queue_policy": config.queue_policy,
             },
             sort_keys=True,
         ).encode()
     ).hexdigest()[:16]
     trace_metadata = _trace_metadata(config, runs)
     scenario_hashes = sorted({str(run["scenario_hash"]) for run in runs})
+    representative = _scenario_for_seed(config, config.seeds[0])
     manifest = {
         "experiment_id": identity,
         "name": config.name,
@@ -87,7 +101,20 @@ def run_experiment(config_path: Path) -> ExperimentArtifacts:
             "workload": config.workload,
             "schedulers": list(config.schedulers),
             "seeds": list(config.seeds),
+            "allocation_policy": config.allocation_policy,
+            "placement_scheduler": config.placement_scheduler,
+            "queue_policy": config.queue_policy,
         },
+        "queue_config_hash": _stable_hash([queue.to_dict() for queue in representative.queues]),
+        "allocation_policy": config.allocation_policy or {"types": list(config.schedulers)},
+        "fairshare_config": {
+            "half_life": representative.fairshare_half_life,
+            "starvation_threshold": representative.starvation_threshold,
+        },
+        "fleet_event_hash": _stable_hash(
+            [event.to_dict() for event in representative.fleet_events]
+        ),
+        "elastic_model_version": "ideal-linear-v1",
         **trace_metadata,
         "runs": manifest_runs,
     }
@@ -103,7 +130,44 @@ def run_experiment(config_path: Path) -> ExperimentArtifacts:
     _write_json(artifacts.summary_json, {"summary": summary})
     _write_summary_csv(artifacts.summary_csv, summary)
     plot_experiment_summary(summary, artifacts.comparison)
+    plot_phase3_timelines(runs, output)
     return artifacts
+
+
+def _scheduler_for_run(
+    config: ExperimentConfig, scheduler_name: str, scenario: Scenario
+) -> Scheduler:
+    if not config.allocation_policy:
+        return create_scheduler(scheduler_name, scenario)
+    placement_name = config.placement_scheduler or "topology"
+    placement = create_scheduler(placement_name, scenario)
+    queue_policy = config.queue_policy
+    historical = scheduler_name == "historical-drf"
+    return FairShareScheduler(
+        QueueHierarchy(scenario.queues),
+        scenario.accounting,
+        placement=placement,
+        historical=historical,
+        half_life=float(config.allocation_policy.get("half_life", scenario.fairshare_half_life)),
+        borrowing=bool(queue_policy.get("borrowing", True)),
+        reclaim=bool(queue_policy.get("reclaim", False)),
+        elastic=bool(queue_policy.get("elastic", True)),
+        name=scheduler_name,
+    )
+
+
+def _stable_hash(payload: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _manifest_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in metrics.items()
+        if key not in {"queue_timeline", "elastic_replica_timeline", "fleet_capacity_timeline"}
+    }
 
 
 def _scenario_for_seed(config: ExperimentConfig, seed: int) -> Scenario:
@@ -115,13 +179,61 @@ def _scenario_for_seed(config: ExperimentConfig, seed: int) -> Scenario:
         path = Path(str(raw_path))
         if not path.is_absolute():
             path = Path.cwd() / path
-        return load_scenario(path)
+        scenario = load_scenario(path)
+        return _apply_tenant_overlay(scenario, config.workload)
     raw_generator = config.workload.get("generator", {})
     if not isinstance(raw_generator, dict):
         raise ValueError("workload.generator must be a mapping")
     values = dict(raw_generator)
     values["seed"] = seed
-    return generate_scenario(GeneratorConfig(**values))
+    scenario = generate_scenario(GeneratorConfig(**values))
+    return _apply_tenant_overlay(scenario, config.workload)
+
+
+def _apply_tenant_overlay(scenario: Scenario, workload: dict[str, Any]) -> Scenario:
+    tenant_count = int(workload.get("tenant_count", 0))
+    if tenant_count <= 0:
+        return scenario
+    capacity_snapshots = schedulable_node_snapshots(
+        scenario.cluster,
+        scenario.fleet_events,
+    )
+    total_gpu_units, total_memory_gb = max(
+        (
+            (
+                sum(
+                    scenario.accounting.model_weights.get(gpu.model, 1.0)
+                    for node in scenario.cluster.nodes
+                    if node.id in node_ids
+                    for gpu in node.gpus
+                ),
+                sum(
+                    gpu.memory_capacity_gb
+                    for node in scenario.cluster.nodes
+                    if node.id in node_ids
+                    for gpu in node.gpus
+                ),
+            )
+            for node_ids in capacity_snapshots
+        ),
+        key=lambda capacity: (capacity[0], capacity[1]),
+    )
+    guarantee = total_gpu_units / tenant_count
+    scenario.queues = tuple(
+        QueueSpec(
+            f"tenant-{index:02d}",
+            "root",
+            guaranteed=ResourceVector(guarantee),
+            limit=ResourceVector(total_gpu_units, total_memory_gb),
+        )
+        for index in range(tenant_count)
+    )
+    for job in scenario.jobs:
+        digest = hashlib.sha256(job.id.encode()).digest()
+        job.queue_id = f"tenant-{int.from_bytes(digest[:8], 'big') % tenant_count:02d}"
+    scenario.metadata["tenant_assignment"] = "synthetic_overlay"
+    scenario.metadata["synthetic_tenant_count"] = tenant_count
+    return scenario
 
 
 def _trace_metadata(config: ExperimentConfig, runs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -137,7 +249,7 @@ def _trace_metadata(config: ExperimentConfig, runs: list[dict[str, Any]]) -> dic
 
 def _write_json(path: Path, payload: Any) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
+        json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
         handle.write("\n")
 
 
