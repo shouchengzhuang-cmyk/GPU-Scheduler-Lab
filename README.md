@@ -110,6 +110,21 @@ uv pip install --python .venv/bin/python -e '.[dev]'
 
 每次输出 `manifest.json`、`runs.json`、`summary.csv`、`summary.json` 和 `comparison.png`；manifest 保存 Git SHA、Python 版本、scenario SHA256、trace 版本、scheduler、seed 和 metrics。
 
+## Canonical study contract
+
+正式研究问题、四类策略、指标、实验变量和 hypotheses 固定在
+[`study/study.yaml`](study/study.yaml)，其字段、引用和 ID 集合由 CLI 与 CI 校验：
+
+```bash
+.venv/bin/python -m gpu_scheduler_lab study validate --config study/study.yaml
+```
+
+`binpack`、`topology-aware`、`historical-drf` 和 `fairshare-reclaim` 是正式
+study 的封闭策略集合；通用 benchmark CLI 中存在的其他 scheduler 不会因此成为正式
+研究策略。指标口径见 [`study/metric-definitions.md`](study/metric-definitions.md)，
+hypotheses 见 [`study/hypotheses.md`](study/hypotheses.md)。本合同只冻结实验设计，
+不生成结论，也不把逻辑时间或合成参数描述成硬件性能。
+
 ## Scheduling policies
 
 ### FIFO / First Fit
