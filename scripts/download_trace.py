@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
+DATASET = "Alibaba cluster-trace-v2026-spot-gpu"
+DATASET_VERSION = "cluster-trace-v2026-spot-gpu"
+SOURCE = "https://github.com/alibaba/clusterdata/tree/master/cluster-trace-v2026-spot-gpu"
+SOURCE_REF = "master"
 BASE_URL = (
     "https://raw.githubusercontent.com/alibaba/clusterdata/master/cluster-trace-v2026-spot-gpu"
 )
@@ -27,11 +32,21 @@ def main() -> None:
         with urllib.request.urlopen(source) as response:  # noqa: S310
             payload = response.read()
         destination.write_bytes(payload)
-        downloaded.append({"file": name, "source_url": source, "bytes": len(payload)})
+        downloaded.append(
+            {
+                "file": name,
+                "source_url": source,
+                "bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
     manifest = {
-        "dataset": "Alibaba cluster-trace-v2026-spot-gpu",
-        "source": "https://github.com/alibaba/clusterdata/tree/master/cluster-trace-v2026-spot-gpu",
+        "dataset": DATASET,
+        "dataset_version": DATASET_VERSION,
+        "source": SOURCE,
+        "source_ref": SOURCE_REF,
         "downloaded_at": datetime.now(UTC).isoformat(),
+        "hash_algorithm": "sha256",
         "files": downloaded,
     }
     with (args.output_dir / "source-manifest.json").open(
