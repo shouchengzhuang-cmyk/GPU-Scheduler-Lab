@@ -1,0 +1,55 @@
+metadata:
+  description: Small hand-checkable placement and preemption scenario
+  seed: 0
+nodes:
+  - id: node-a
+    topology: {rack: rack-1}
+    gpus:
+      - {id: a-0, memory_gb: 24}
+      - {id: a-1, memory_gb: 24}
+      - {id: a-2, memory_gb: 24}
+      - {id: a-3, memory_gb: 24}
+  - id: node-b
+    topology: {rack: rack-2}
+    gpus:
+      - {id: b-0, memory_gb: 80}
+      - {id: b-1, memory_gb: 80}
+      - {id: b-2, memory_gb: 80}
+      - {id: b-3, memory_gb: 80}
+jobs:
+  - id: job-a
+    arrival_time: 0
+    duration: 40
+    gpu_count: 2
+    gpu_memory_gb: 20
+    priority: low
+    type: inference
+    gang: false
+    sla_deadline: 55
+  - id: job-b
+    arrival_time: 0
+    duration: 70
+    gpu_count: 4
+    gpu_memory_gb: 40
+    priority: normal
+    type: training
+    gang: true
+    sla_deadline: 90
+  - id: job-c
+    arrival_time: 2
+    duration: 25
+    gpu_count: 2
+    gpu_memory_gb: 20
+    priority: normal
+    type: inference
+    gang: false
+    sla_deadline: 65
+  - id: job-d
+    arrival_time: 5
+    duration: 15
+    gpu_count: 2
+    gpu_memory_gb: 70
+    priority: critical
+    type: inference
+    gang: true
+    sla_deadline: 30

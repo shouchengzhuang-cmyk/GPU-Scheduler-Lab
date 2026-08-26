@@ -1,0 +1,46 @@
+{
+  "contract_version": "mini-ai-cloud.gpu-scheduler-lab/v1",
+  "workers": [
+    {
+      "id": "worker-a",
+      "schedulable": true,
+      "labels": {"rack": "rack-1"},
+      "gpu_devices": [
+        {"device_uuid": "GPU-a0", "memory_total_mb": 24576, "health": "healthy"},
+        {"device_uuid": "GPU-a1", "memory_total_mb": 24576, "health": "healthy"}
+      ]
+    },
+    {
+      "id": "worker-b",
+      "schedulable": true,
+      "labels": {"rack": "rack-2"},
+      "gpu_devices": [
+        {"device_uuid": "GPU-b0", "memory_total_mb": 81920, "health": "healthy"},
+        {"device_uuid": "GPU-b1", "memory_total_mb": 81920, "health": "healthy"}
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-training",
+      "project_id": "project-a",
+      "arrival_time": 0,
+      "duration_seconds": 80,
+      "gpu_count": 2,
+      "gpu_memory_mb": 40960,
+      "priority": 50,
+      "workload_type": "training",
+      "labels": {"gpu_scheduler_lab/gang": "true"}
+    },
+    {
+      "id": "task-inference",
+      "project_id": "project-b",
+      "arrival_time": 5,
+      "duration_seconds": 12,
+      "gpu_count": 1,
+      "gpu_memory_mb": 20480,
+      "priority": 95,
+      "workload_type": "model_inference"
+    }
+  ]
+}
