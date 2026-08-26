@@ -137,6 +137,25 @@ runner 支持 one-at-a-time 或 Cartesian 参数网格、多 seed、warm-up、re
 `stddev`；这些统计只描述当前 simulator/config，不自动构成显著性或生产性能结论。
 `study/study-small.yaml` 是 CI orchestration fixture，不用于研究结论。
 
+生成正式的可审计研究交付包：
+
+```bash
+make reproduce-study
+```
+
+该命令运行正式配置并在 `build/study/canonical/` 生成 `manifest.json`、
+`environment.json`、`scenario-hashes.json`、`runs.json`、summary、表格、图表、
+`report.md` 和覆盖全部产物的 `hashes.sha256`。报告数值只从机器生成的 summary
+渲染；`study verify` 会拒绝缺失、额外、越界、符号链接或哈希不匹配的产物。
+
+```bash
+python -m gpu_scheduler_lab study report --input build/study/canonical
+python -m gpu_scheduler_lab study verify --input build/study/canonical
+```
+
+`dirty_tree` 会明确记录运行时工作树状态。报告仍是离散事件 simulation 证据，不是
+真实 GPU、Kubernetes 或生产 scheduler throughput；CI small fixture 只验证完整生成链路。
+
 ## Scheduling policies
 
 ### FIFO / First Fit
