@@ -1,0 +1,67 @@
+name: Public trace study
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/b7-public-trace-study
+    paths:
+      - .github/workflows/public-trace-study.yml
+      - docs/public-trace-study.md
+      - scripts/download_trace.py
+      - scripts/run_public_trace_study.py
+      - study/public-trace-study.yaml
+      - gpu_scheduler_lab/traces/**
+      - gpu_scheduler_lab/schedulers/**
+      - gpu_scheduler_lab/simulator/**
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install simulator
+        run: python -m pip install -e .
+      - name: Download and hash full public source
+        run: python scripts/download_trace.py --output-dir .data/alibaba-spot-gpu-v2026
+      - name: Run frozen bounded-window replay
+        run: >-
+          python scripts/run_public_trace_study.py
+          --input .data/alibaba-spot-gpu-v2026
+          --config study/public-trace-study.yaml
+          --output-dir build/public-trace-study
+      - name: Verify evidence contract and bundle hashes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd build/public-trace-study
+          sha256sum -c hashes.sha256
+          test ! -e node_info_df.csv
+          test ! -e job_info_df.csv
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("results.json").read_text(encoding="utf-8"))
+          assert payload["evidence_kind"] == "SIMULATED_TRACE_REPLAY"
+          assert payload["dataset_version"] == "cluster-trace-v2026-spot-gpu"
+          assert payload["windows"]
+          assert all(window["policies"] for window in payload["windows"])
+          PY
+      - name: Show report in logs
+        run: cat build/public-trace-study/report.md
+      - name: Upload public trace evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-trace-study-${{ github.sha }}
+          path: build/public-trace-study
+          if-no-files-found: error
+          retention-days: 14
