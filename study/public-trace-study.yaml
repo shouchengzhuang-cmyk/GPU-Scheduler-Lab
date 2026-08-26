@@ -6,16 +6,21 @@ public_trace_study:
   dataset:
     name: Alibaba Cluster Trace Program
     version: cluster-trace-v2026-spot-gpu
-    source_url: https://github.com/alibaba/clusterdata/tree/master/cluster-trace-v2026-spot-gpu
+    source_ref: c08f563115af39bad047353431bf745b4dee665c
+    source_url: https://github.com/alibaba/clusterdata/tree/c08f563115af39bad047353431bf745b4dee665c/cluster-trace-v2026-spot-gpu
     required_files:
+      - README.md
       - node_info_df.csv
       - job_info_df.csv
       - source-manifest.json
   normalization:
     gpu_memory_gb:
       A10: 24
+      A100-SXM4-40GB: 40
       A100-SXM4-80GB: 80
-      A800-SXM4-80GB: 80
+      H100-80GB: 80
+      V100M16: 16
+      V100M32: 32
     exclusions:
       - fractional GPU requests are outside this integer-GPU simulator
       - GPU models without an explicit, auditable memory mapping are excluded
@@ -42,7 +47,7 @@ public_trace_study:
       - queue_weight
       - guaranteed_gpu_units
   claims:
-    - The source files are downloaded in full and verified by SHA-256 before preprocessing.
+    - The pinned upstream README and source CSVs are downloaded in full and verified by SHA-256.
     - Replay windows are deterministic bounded samples from the eligible source rows.
     - Tenant queue guarantees are synthetic experiment controls, not Alibaba trace fields.
     - Results are discrete-event simulation evidence, not real-GPU or production measurements.
