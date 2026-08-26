@@ -23,6 +23,21 @@ jobs:
         run: mypy .
       - name: Pytest
         run: pytest
+      - name: Build and install wheel
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m build --wheel
+          python -m venv build/wheel-smoke-venv
+          build/wheel-smoke-venv/bin/python -m pip install dist/*.whl
+          build/wheel-smoke-venv/bin/gpu-scheduler-lab --help >/dev/null
+          build/wheel-smoke-venv/bin/python - <<'PY'
+          import importlib.metadata
+
+          import gpu_scheduler_lab
+
+          assert importlib.metadata.version("gpu-scheduler-lab") == gpu_scheduler_lab.__version__
+          PY
       - name: Benchmark smoke
         run: >-
           python -m gpu_scheduler_lab compare

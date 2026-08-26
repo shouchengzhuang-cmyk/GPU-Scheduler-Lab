@@ -1,14 +1,15 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "gpu-scheduler-lab"
-version = "0.2.0"
+version = "0.3.0.dev0"
 description = "Deterministic discrete-event GPU scheduling simulator"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "shouchengzhuang-cmyk" }]
 dependencies = [
   "matplotlib>=3.9,<4",
@@ -17,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "build>=1.2,<2",
   "hypothesis>=6.100,<7",
   "mypy>=1.11,<2",
   "pytest>=8.3,<9",
@@ -26,6 +28,11 @@ dev = [
 
 [project.scripts]
 gpu-scheduler-lab = "gpu_scheduler_lab.cli:main"
+
+[project.urls]
+Repository = "https://github.com/shouchengzhuang-cmyk/GPU-Scheduler-Lab"
+Issues = "https://github.com/shouchengzhuang-cmyk/GPU-Scheduler-Lab/issues"
+Security = "https://github.com/shouchengzhuang-cmyk/GPU-Scheduler-Lab/security/policy"
 
 [tool.hatch.build.targets.wheel]
 packages = ["gpu_scheduler_lab"]

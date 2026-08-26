@@ -1,0 +1,39 @@
+name: Research or feature proposal
+description: 提议可验证的研究问题、策略、指标或工具改进
+title: "feat: "
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: 研究或工程问题
+      description: 说明要回答的问题和为什么现有能力不足。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 最小方案
+      description: 描述策略、接口、scenario 或指标变化。
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: 非目标
+      description: 明确不解决的事项和不能外推的真实系统结论。
+    validations:
+      required: true
+  - type: textarea
+    id: baseline
+    attributes:
+      label: 对照与验证计划
+      description: workload、seed、baseline、指标、测试和证据标签如何设计？
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: 兼容性与风险
+      description: 是否改变事件语义、API、CLI、schema、指标或旧结果解释？
+    validations:
+      required: true
