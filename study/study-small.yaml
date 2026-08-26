@@ -1,0 +1,11 @@
+extends: study.yaml
+scenario: scenarios/small.yaml
+execution:
+  seeds: [11, 29]
+  output_directory: ../build/study/small
+  grid_mode: one-at-a-time
+  warmup_runs: 0
+  replications_per_seed: 1
+  max_retries: 1
+  resume: true
+  ablations: [topology]

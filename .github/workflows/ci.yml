@@ -23,6 +23,12 @@ jobs:
         run: mypy .
       - name: Validate canonical study contract
         run: python -m gpu_scheduler_lab study validate --config study/study.yaml
+      - name: Run and resume small canonical study fixture
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m gpu_scheduler_lab study run --config study/study-small.yaml
+          python -m gpu_scheduler_lab study run --config study/study-small.yaml
       - name: Pytest
         run: pytest
       - name: Build and install wheel
