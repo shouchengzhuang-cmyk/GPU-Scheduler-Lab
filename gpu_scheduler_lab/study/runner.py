@@ -487,13 +487,17 @@ def _apply_tenant_queues(scenario: Scenario, tenant_count: int) -> None:
     if tenant_count <= 0:
         raise ValueError("tenant_count must be positive")
     capacity = float(scenario.cluster.total_gpu_count)
+    memory_capacity = sum(gpu.memory_capacity_gb for gpu in scenario.cluster.schedulable_gpus)
     guarantee = capacity / tenant_count
     scenario.queues = tuple(
         QueueSpec(
             id=f"tenant-{index:02d}",
             parent="root",
             guaranteed=ResourceVector(gpu_units=guarantee),
-            limit=ResourceVector(gpu_units=capacity),
+            limit=ResourceVector(
+                gpu_units=capacity,
+                gpu_memory_gb=memory_capacity,
+            ),
         )
         for index in range(tenant_count)
     )

@@ -51,6 +51,23 @@ def test_same_config_seed_and_plan_produce_identical_metrics() -> None:
     assert simulate_plan(config, template, plan) == simulate_plan(config, template, plan)
 
 
+def test_formal_fairshare_policies_do_not_receive_zero_memory_limits() -> None:
+    config = StudyConfig.load(SMALL_CONFIG)
+    template = load_scenario_template(config.scenario_path)
+    fingerprint = study_config_hash(config, template, "d" * 40)
+    plans = build_run_plan(config, template, fingerprint)
+
+    for policy_id in ("historical-drf", "fairshare-reclaim"):
+        plan = next(
+            item
+            for item in plans
+            if item.variant_id == "baseline" and item.policy_id == policy_id and item.seed == 11
+        )
+        metrics = simulate_plan(config, template, plan)
+        assert metrics["completion-rate"] > 0
+        assert metrics["average-gpu-utilization"] > 0
+
+
 def test_retry_resume_and_partial_result_recovery(tmp_path: Path) -> None:
     config_path = _temporary_overlay(tmp_path)
     calls: dict[str, int] = {}
