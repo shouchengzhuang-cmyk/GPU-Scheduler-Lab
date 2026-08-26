@@ -8,6 +8,7 @@ on:
     paths:
       - .github/workflows/public-trace-study.yml
       - docs/public-trace-study.md
+      - docs/traces/alibaba.md
       - scripts/download_trace.py
       - scripts/run_public_trace_study.py
       - study/public-trace-study.yaml
@@ -18,6 +19,7 @@ on:
     paths:
       - .github/workflows/public-trace-study.yml
       - docs/public-trace-study.md
+      - docs/traces/alibaba.md
       - scripts/download_trace.py
       - scripts/run_public_trace_study.py
       - study/public-trace-study.yaml
@@ -40,6 +42,8 @@ jobs:
           cache: pip
       - name: Install simulator
         run: python -m pip install -e .
+      - name: Compile B7 scripts
+        run: python -m compileall -q scripts/download_trace.py scripts/run_public_trace_study.py
       - name: Download and hash full public source
         run: python scripts/download_trace.py --output-dir .data/alibaba-spot-gpu-v2026
       - name: Run frozen bounded-window replay
@@ -54,15 +58,26 @@ jobs:
           set -Eeuo pipefail
           cd build/public-trace-study
           sha256sum -c hashes.sha256
+          test ! -e README.md
           test ! -e node_info_df.csv
           test ! -e job_info_df.csv
           python - <<'PY'
           import json
           from pathlib import Path
 
+          expected_ref = "c08f563115af39bad047353431bf745b4dee665c"
           payload = json.loads(Path("results.json").read_text(encoding="utf-8"))
+          manifest = json.loads(Path("source-manifest.json").read_text(encoding="utf-8"))
+          normalization = json.loads(
+              Path("normalization-report.json").read_text(encoding="utf-8")
+          )
           assert payload["evidence_kind"] == "SIMULATED_TRACE_REPLAY"
           assert payload["dataset_version"] == "cluster-trace-v2026-spot-gpu"
+          assert payload["source_ref"] == expected_ref
+          assert manifest["source_ref"] == expected_ref
+          assert len(manifest["files"]) == 3
+          assert normalization["jobs"]["source_rows"] > 0
+          assert normalization["nodes"]["source_rows"] > 0
           assert payload["windows"]
           assert all(window["policies"] for window in payload["windows"])
           PY
