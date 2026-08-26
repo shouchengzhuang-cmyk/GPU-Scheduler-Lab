@@ -125,6 +125,18 @@ study 的封闭策略集合；通用 benchmark CLI 中存在的其他 scheduler 
 hypotheses 见 [`study/hypotheses.md`](study/hypotheses.md)。本合同只冻结实验设计，
 不生成结论，也不把逻辑时间或合成参数描述成硬件性能。
 
+Sensitivity 与单机制 ablation runner 使用同一份合同：
+
+```bash
+.venv/bin/python -m gpu_scheduler_lab study run --config study/study.yaml
+```
+
+runner 支持 one-at-a-time 或 Cartesian 参数网格、多 seed、warm-up、replication、
+有界 retry 和基于稳定 run ID 的部分结果恢复。每个 run 写入独立
+`runs/<run-id>/manifest.json` 与 `result.json`，汇总保留 `samples`、`mean`、
+`stddev`；这些统计只描述当前 simulator/config，不自动构成显著性或生产性能结论。
+`study/study-small.yaml` 是 CI orchestration fixture，不用于研究结论。
+
 ## Scheduling policies
 
 ### FIFO / First Fit

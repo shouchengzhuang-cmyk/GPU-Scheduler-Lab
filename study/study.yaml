@@ -140,3 +140,9 @@ hypotheses:
 execution:
   seeds: [20260826, 20260827, 20260828]
   output_directory: ../build/study/canonical
+  grid_mode: one-at-a-time
+  warmup_runs: 1
+  replications_per_seed: 1
+  max_retries: 1
+  resume: true
+  ablations: [topology, history, reclaim, elastic]

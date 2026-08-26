@@ -13,6 +13,7 @@ from gpu_scheduler_lab.scenario import Scenario, load_scenario, write_scenario
 from gpu_scheduler_lab.schedulers import create_scheduler
 from gpu_scheduler_lab.simulator.engine import SimulationResult, Simulator
 from gpu_scheduler_lab.study import StudyConfig
+from gpu_scheduler_lab.study.runner import run_study
 from gpu_scheduler_lab.traces import AlibabaSpotGPUTraceAdapter, TraceFilter
 from gpu_scheduler_lab.visualization import plot_comparison, plot_timeline
 from gpu_scheduler_lab.workload import GeneratorConfig, generate_scenario
@@ -233,6 +234,16 @@ def _study_validate(args: argparse.Namespace) -> None:
     )
 
 
+def _study_run(args: argparse.Namespace) -> None:
+    artifacts = run_study(args.config)
+    print(
+        f"Study manifest: {artifacts.manifest}\n"
+        f"Summary JSON: {artifacts.summary_json}\n"
+        f"Summary CSV: {artifacts.summary_csv}\n"
+        f"Runs: {artifacts.run_count} ({artifacts.resumed_count} resumed)"
+    )
+
+
 def _add_output_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-dir", type=Path, default=Path("results"))
     parser.add_argument("--no-charts", action="store_true")
@@ -333,6 +344,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="also require one policy ID to be registered in the canonical study",
     )
     study_validate.set_defaults(handler=_study_validate)
+    study_run = study_commands.add_parser("run", help="run sensitivity and ablation plans")
+    study_run.add_argument("--config", type=Path, required=True)
+    study_run.set_defaults(handler=_study_run)
     return parser
 
 
