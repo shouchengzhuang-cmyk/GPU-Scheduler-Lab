@@ -1,0 +1,142 @@
+schema_version: "1.0.0"
+study:
+  id: canonical-gpu-scheduler-study
+  title: GPU scheduling trade-offs under contention and capacity volatility
+  research_question: >-
+    How do packing, topology awareness, historical fairness, and reclaim change
+    utilization, latency, fairness, fragmentation, and reliability as workload
+    intensity, GPU heterogeneity, topology constraints, recovery cost, and
+    revocable capacity vary in this deterministic simulator?
+policy_registry: policies.yaml
+scenario: scenarios/canonical.yaml
+policies:
+  - binpack
+  - topology-aware
+  - historical-drf
+  - fairshare-reclaim
+metrics:
+  - id: average-gpu-utilization
+    source_metric: average_gpu_utilization
+    unit: ratio
+    direction: maximize
+    description: Time-weighted busy GPU capacity divided by schedulable capacity time.
+  - id: p95-wait
+    source_metric: p95_waiting_time
+    unit: logical-time
+    direction: minimize
+    description: 95th percentile of completed-job waiting time.
+  - id: completion-rate
+    source_metric: completion_rate
+    unit: ratio
+    direction: maximize
+    description: Completed jobs divided by submitted jobs at the simulation horizon.
+  - id: gpu-count-fragmentation
+    source_metric: gpu_count_fragmentation
+    unit: gpu-slots
+    direction: minimize
+    description: Time-weighted unusable free GPU slots caused by count constraints.
+  - id: gpu-memory-fragmentation
+    source_metric: gpu_memory_fragmentation
+    unit: gibibytes
+    direction: minimize
+    description: Time-weighted unusable free GPU memory caused by placement constraints.
+  - id: guaranteed-share-satisfaction
+    source_metric: queue_metrics.*.guaranteed_share_satisfaction
+    unit: ratio
+    direction: maximize
+    description: Per-queue satisfied entitled demand divided by entitled demand.
+  - id: jain-service-quality-fairness
+    source_metric: queue_service_jains_index
+    unit: index
+    direction: maximize
+    description: Jain index over active leaf-queue service-quality values.
+  - id: preemption-overhead
+    source_metric: preemption_overhead_ratio
+    unit: ratio
+    direction: minimize
+    description: Wasted checkpoint and restart GPU time divided by busy GPU time.
+  - id: checkpoint-overhead
+    source_metric: total_checkpoint_overhead
+    unit: logical-time
+    direction: minimize
+    description: Sum of modeled checkpoint overhead across all jobs.
+  - id: restart-overhead
+    source_metric: total_restart_overhead
+    unit: logical-time
+    direction: minimize
+    description: Sum of modeled restart overhead across all jobs.
+  - id: average-topology-distance
+    source_metric: average_topology_distance
+    unit: topology-cost
+    direction: minimize
+    description: Mean modeled topology distance for sampled placements.
+  - id: topology-violation
+    source_metric: topology_requirement_violation_count
+    unit: count
+    direction: minimize
+    description: Placements that violate a declared topology requirement.
+  - id: sla-violation
+    source_metric: sla_violation_rate
+    unit: ratio
+    direction: minimize
+    description: SLA jobs unfinished or completed after their logical deadline.
+variables:
+  - id: workload-intensity
+    parameter: generator.arrival_rate
+    values: [0.6, 1.0, 1.4]
+    description: Synthetic job arrival rate; higher values increase offered load.
+  - id: gpu-heterogeneity
+    parameter: controls.gpu_model_mix
+    values: [homogeneous, balanced, skewed]
+    description: Relative mix of GPU models and memory capacities in the synthetic fleet.
+  - id: topology-strictness
+    parameter: controls.topology_strictness
+    values: [none, rack, node]
+    description: Required locality level for topology-constrained jobs.
+  - id: checkpoint-restart-cost
+    parameter: controls.checkpoint_restart_cost
+    values: [0.0, 2.0, 8.0]
+    description: Modeled logical-time cost paid on preemption and recovery.
+  - id: revocable-capacity-ratio
+    parameter: controls.revocable_capacity_ratio
+    values: [0.0, 0.25, 0.5]
+    description: Fraction of modeled fleet capacity exposed to revocation events.
+hypotheses:
+  - id: h1-load-pressure
+    statement: Higher workload intensity increases tail wait and can reduce completion rate.
+    independent_variable_ids: [workload-intensity]
+    dependent_metric_ids: [p95-wait, completion-rate, average-gpu-utilization]
+  - id: h2-heterogeneity-fragmentation
+    statement: Greater GPU heterogeneity increases count or memory fragmentation.
+    independent_variable_ids: [gpu-heterogeneity]
+    dependent_metric_ids:
+      - gpu-count-fragmentation
+      - gpu-memory-fragmentation
+      - average-gpu-utilization
+  - id: h3-topology-tradeoff
+    statement: Stricter topology requirements reduce distance at a latency or completion cost.
+    independent_variable_ids: [topology-strictness]
+    dependent_metric_ids:
+      - average-topology-distance
+      - topology-violation
+      - p95-wait
+      - completion-rate
+  - id: h4-recovery-cost
+    statement: Higher checkpoint and restart cost increases preemption overhead.
+    independent_variable_ids: [checkpoint-restart-cost]
+    dependent_metric_ids:
+      - preemption-overhead
+      - checkpoint-overhead
+      - restart-overhead
+      - completion-rate
+  - id: h5-revocable-fairness
+    statement: More revocable capacity stresses guarantees, fairness, and SLA outcomes.
+    independent_variable_ids: [revocable-capacity-ratio]
+    dependent_metric_ids:
+      - guaranteed-share-satisfaction
+      - jain-service-quality-fairness
+      - sla-violation
+      - restart-overhead
+execution:
+  seeds: [20260826, 20260827, 20260828]
+  output_directory: ../build/study/canonical

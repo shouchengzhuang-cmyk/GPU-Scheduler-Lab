@@ -12,6 +12,7 @@ from gpu_scheduler_lab.integrations.mini_ai_cloud import import_mini_ai_cloud_ex
 from gpu_scheduler_lab.scenario import Scenario, load_scenario, write_scenario
 from gpu_scheduler_lab.schedulers import create_scheduler
 from gpu_scheduler_lab.simulator.engine import SimulationResult, Simulator
+from gpu_scheduler_lab.study import StudyConfig
 from gpu_scheduler_lab.traces import AlibabaSpotGPUTraceAdapter, TraceFilter
 from gpu_scheduler_lab.visualization import plot_comparison, plot_timeline
 from gpu_scheduler_lab.workload import GeneratorConfig, generate_scenario
@@ -221,6 +222,17 @@ def _experiment(args: argparse.Namespace) -> None:
     )
 
 
+def _study_validate(args: argparse.Namespace) -> None:
+    config = StudyConfig.load(args.config)
+    if args.policy is not None:
+        config.require_policy(args.policy)
+    print(
+        f"Validated study {config.id}: {len(config.policies)} policies, "
+        f"{len(config.metrics)} metrics, {len(config.variables)} variables, "
+        f"{len(config.hypotheses)} hypotheses."
+    )
+
+
 def _add_output_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-dir", type=Path, default=Path("results"))
     parser.add_argument("--no-charts", action="store_true")
@@ -311,6 +323,16 @@ def build_parser() -> argparse.ArgumentParser:
     experiment = subparsers.add_parser("experiment", help="run a reproducible experiment")
     experiment.add_argument("--config", type=Path, required=True)
     experiment.set_defaults(handler=_experiment)
+
+    study = subparsers.add_parser("study", help="validate or run the canonical study")
+    study_commands = study.add_subparsers(dest="study_command", required=True)
+    study_validate = study_commands.add_parser("validate", help="validate the study contract")
+    study_validate.add_argument("--config", type=Path, required=True)
+    study_validate.add_argument(
+        "--policy",
+        help="also require one policy ID to be registered in the canonical study",
+    )
+    study_validate.set_defaults(handler=_study_validate)
     return parser
 
 

@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shouchengzhuang-cmyk/GPU-Scheduler-Lab/blob/main/study/schema.json",
+  "title": "GPU Scheduler Lab canonical study",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "study",
+    "policy_registry",
+    "scenario",
+    "policies",
+    "metrics",
+    "variables",
+    "hypotheses",
+    "execution"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "study": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "research_question"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "research_question": {"type": "string", "minLength": 1}
+      }
+    },
+    "policy_registry": {"type": "string", "minLength": 1},
+    "scenario": {"type": "string", "minLength": 1},
+    "policies": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["binpack", "topology-aware", "historical-drf", "fairshare-reclaim"]
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/metric"}
+    },
+    "variables": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/variable"}
+    },
+    "hypotheses": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/hypothesis"}
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seeds", "output_directory"],
+      "properties": {
+        "seeds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "integer"}
+        },
+        "output_directory": {"type": "string", "minLength": 1}
+      }
+    }
+  },
+  "$defs": {
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source_metric", "unit", "direction", "description"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "source_metric": {"type": "string", "minLength": 1},
+        "unit": {"type": "string", "minLength": 1},
+        "direction": {"enum": ["maximize", "minimize", "context"]},
+        "description": {"type": "string", "minLength": 1}
+      }
+    },
+    "variable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "parameter", "values", "description"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "parameter": {"type": "string", "minLength": 1},
+        "values": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": ["string", "number", "integer", "boolean"]}
+        },
+        "description": {"type": "string", "minLength": 1}
+      }
+    },
+    "hypothesis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "statement",
+        "independent_variable_ids",
+        "dependent_metric_ids"
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "statement": {"type": "string", "minLength": 1},
+        "independent_variable_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "dependent_metric_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

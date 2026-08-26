@@ -21,6 +21,8 @@ jobs:
         run: ruff check .
       - name: Mypy
         run: mypy .
+      - name: Validate canonical study contract
+        run: python -m gpu_scheduler_lab study validate --config study/study.yaml
       - name: Pytest
         run: pytest
       - name: Build and install wheel

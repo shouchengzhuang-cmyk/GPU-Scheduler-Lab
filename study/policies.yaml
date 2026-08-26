@@ -1,0 +1,26 @@
+schema_version: "1.0.0"
+policies:
+  - id: binpack
+    scheduler: binpack
+    description: Pack jobs onto the smallest feasible set of GPU nodes.
+    mechanisms: [placement, packing]
+    limitations:
+      - Does not model queue entitlement, historical service, reclaim, or topology preference.
+  - id: topology-aware
+    scheduler: topology
+    description: Prefer placements with lower modeled node, rack, and zone distance.
+    mechanisms: [placement, topology]
+    limitations:
+      - Topology costs are simulator labels, not measured interconnect bandwidth or latency.
+  - id: historical-drf
+    scheduler: historical-drf
+    description: Allocate by dominant share while accounting for decayed historical service.
+    mechanisms: [allocation, fairness, history, borrowing, reclaim]
+    limitations:
+      - Historical service and half-life are model parameters, not production usage records.
+  - id: fairshare-reclaim
+    scheduler: fairshare-reclaim
+    description: Borrow unused guaranteed capacity and reclaim it for entitled demand.
+    mechanisms: [allocation, fairness, borrowing, reclaim]
+    limitations:
+      - Reclaim cost uses the simulator checkpoint and restart model.

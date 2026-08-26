@@ -1,0 +1,27 @@
+schema_version: "1.0.0"
+scenario:
+  id: canonical-synthetic-gpu-fleet
+  description: >-
+    Seeded synthetic workload and fleet controls used to compare the four frozen
+    policies without claiming hardware or production control-plane performance.
+  generator:
+    profile: mixed
+    jobs: 240
+    nodes: 8
+    gpus_per_node: 8
+    arrival_rate: 1.0
+    median_duration: 60.0
+    duration_distribution: lognormal
+    training_ratio: 0.4
+    gang_probability: 0.35
+    sla_probability: 0.5
+    tenant_count: 4
+  controls:
+    gpu_model_mix: balanced
+    topology_strictness: rack
+    checkpoint_restart_cost: 2.0
+    revocable_capacity_ratio: 0.25
+  limitations:
+    - Logical time is not wall-clock scheduler latency.
+    - GPU models and costs are synthetic and do not represent benchmarked hardware.
+    - Results describe this simulator and workload family, not production Kubernetes behavior.
