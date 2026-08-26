@@ -1,0 +1,104 @@
+{
+  "cases": {
+    "gang-conservation": {
+      "jobs": {
+        "job-a": {
+          "completion_time": 40.0,
+          "first_start_time": 0.0,
+          "preemption_count": 0,
+          "reclaim_victim_count": 0,
+          "recovery_count": 0,
+          "status": "completed"
+        },
+        "job-b": {
+          "completion_time": 70.0,
+          "first_start_time": 0.0,
+          "preemption_count": 0,
+          "reclaim_victim_count": 0,
+          "recovery_count": 0,
+          "status": "completed"
+        },
+        "job-c": {
+          "completion_time": 27.0,
+          "first_start_time": 2.0,
+          "preemption_count": 0,
+          "reclaim_victim_count": 0,
+          "recovery_count": 0,
+          "status": "completed"
+        },
+        "job-d": {
+          "completion_time": 85.0,
+          "first_start_time": 70.0,
+          "preemption_count": 0,
+          "reclaim_victim_count": 0,
+          "recovery_count": 0,
+          "status": "completed"
+        }
+      },
+      "metrics": {
+        "busy_gpu_time": 440.0,
+        "completed_jobs": 4,
+        "idle_gpu_time": 240.0,
+        "simulation_horizon": 85.0,
+        "topology_requirement_violation_count": 0
+      },
+      "scenario": "scenarios/demo.yaml",
+      "scenario_sha256": "1499d0678e8a98ea9a14f2c6eedc4b934cb484ef49932765a8d96af125acd673",
+      "scheduler": "fifo"
+    },
+    "revocable-recovery": {
+      "jobs": {
+        "fleet-training": {
+          "completion_time": 16.0,
+          "first_start_time": 0.0,
+          "preemption_count": 0,
+          "reclaim_victim_count": 0,
+          "recovery_count": 1,
+          "status": "completed"
+        }
+      },
+      "metrics": {
+        "capacity_return_count": 1,
+        "capacity_revoke_count": 1,
+        "completed_jobs": 1,
+        "jobs_affected_by_capacity_loss": 1,
+        "recovery_overhead": 1.0,
+        "simulation_horizon": 16.0
+      },
+      "scenario": "scenarios/revocable-fleet.yaml",
+      "scenario_sha256": "b8360b094c9659a47b0fd64595ee9a25cf1e3e464e1d1a9ff813e10bcade3fe9",
+      "scheduler": "historical-drf"
+    },
+    "tenant-reclaim": {
+      "jobs": {
+        "product-guarantee": {
+          "completion_time": 8.0,
+          "first_start_time": 3.0,
+          "preemption_count": 0,
+          "reclaim_victim_count": 0,
+          "recovery_count": 0,
+          "status": "completed"
+        },
+        "research-borrower": {
+          "completion_time": 27.0,
+          "first_start_time": 0.0,
+          "preemption_count": 1,
+          "reclaim_victim_count": 1,
+          "recovery_count": 0,
+          "status": "completed"
+        }
+      },
+      "metrics": {
+        "busy_gpu_time": 98.0,
+        "completed_jobs": 2,
+        "guarantee_satisfaction_variance": 8.573388203017909e-05,
+        "queue_service_jains_index": 0.9965517241379308,
+        "simulation_horizon": 27.0
+      },
+      "scenario": "scenarios/multi-tenant-borrow-reclaim.yaml",
+      "scenario_sha256": "61c3a2086f2d672ef1d5d135792aa49812eb397d11ae51f498a174a70958e833",
+      "scheduler": "fairshare-reclaim"
+    }
+  },
+  "schema_version": 1
+}

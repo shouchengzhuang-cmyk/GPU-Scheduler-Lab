@@ -38,6 +38,10 @@ jobs:
           path: build/study/small
           if-no-files-found: error
           retention-days: 14
+      - name: Validate scheduler invariant contract and golden baseline
+        run: python -m gpu_scheduler_lab.study.invariants --config study/invariants.yaml
+      - name: Check invariant baseline update is clean
+        run: python scripts/update_invariant_baselines.py
       - name: Pytest
         run: pytest
       - name: Build and install wheel
