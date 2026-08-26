@@ -19,6 +19,9 @@ Alibaba 另有规模更大的 `cluster-trace-gpu-v2026` ASI hourly fact tables�
 
 测试 fixture 只包含上游 README 公开展示的示例行，并在 fixture README 中标明来源。
 
+B7 公开 trace study 进一步把上游 revision 固定到 commit
+`c08f563115af39bad047353431bf745b4dee665c`，同时下载并哈希该 revision 的 `README.md`，以便结果能够指回确切的 attribution/citation 上下文。详见 `docs/public-trace-study.md`。
+
 ## Download
 
 默认下载到 `.data/`，该目录被 Git 忽略：
@@ -28,7 +31,9 @@ python scripts/download_trace.py \
   --output-dir .data/alibaba-spot-gpu-v2026
 ```
 
-脚本只从 Alibaba 官方 GitHub repository 的 raw files 下载，并写入 `source-manifest.json`，记录 source URL、dataset name、下载时间和 byte size。已存在文件默认不覆盖。
+脚本从固定的 Alibaba 官方 GitHub commit 下载 `README.md`、`node_info_df.csv` 与
+`job_info_df.csv`，并写入 `source-manifest.json`。manifest 记录 dataset/version、固定
+source revision、每个文件的 source URL、byte size 与 SHA-256；已存在文件默认不覆盖。
 
 ## Import
 
@@ -93,4 +98,4 @@ python -m gpu_scheduler_lab trace-import \
   --output build/alibaba-sample.yaml
 ```
 
-完整 dataset 缺失不会影响 package import、unit tests 或 CI。
+完整 dataset 缺失不会影响 package import、unit tests 或普通 CI；完整数据 replay 使用独立的 B7 workflow。
