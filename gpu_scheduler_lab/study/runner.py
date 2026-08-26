@@ -26,6 +26,11 @@ from gpu_scheduler_lab.scenario import Scenario
 from gpu_scheduler_lab.schedulers import create_scheduler
 from gpu_scheduler_lab.schedulers.base import Scheduler
 from gpu_scheduler_lab.simulator.engine import Simulator
+from gpu_scheduler_lab.study.artifacts import (
+    capture_environment,
+    git_worktree_dirty,
+    study_source_hashes,
+)
 from gpu_scheduler_lab.study.config import Policy, StudyConfig
 from gpu_scheduler_lab.workload import GeneratorConfig, generate_scenario
 
@@ -65,6 +70,9 @@ class StudyRunPlan:
 class StudyArtifacts:
     output_directory: Path
     manifest: Path
+    environment: Path
+    scenario_hashes: Path
+    runs_json: Path
     summary_json: Path
     summary_csv: Path
     run_count: int
@@ -135,6 +143,9 @@ def run_study(
     completed.sort(key=_record_sort_key)
     summary = aggregate_study_runs(completed)
     manifest_path = output / "manifest.json"
+    environment_path = output / "environment.json"
+    scenario_hashes_path = output / "scenario-hashes.json"
+    runs_json = output / "runs.json"
     summary_json = output / "summary.json"
     summary_csv = output / "summary.csv"
     _write_json(
@@ -142,22 +153,74 @@ def run_study(
         {
             "schema_version": "1.0.0",
             "study_id": config.id,
+            "title": config.title,
+            "research_question": config.research_question,
             "git_sha": revision,
+            "dirty_tree": git_worktree_dirty(config.source_path.parent),
             "config_sha256": config_sha256,
+            "source_config": config.source_path.name,
+            "scenario_id": template.id,
+            "scenario": template.raw.get("scenario", {}),
             "run_count": len(completed),
-            "policy_ids": [policy.id for policy in config.policies],
+            "policies": [
+                {
+                    "id": policy.id,
+                    "scheduler": policy.scheduler,
+                    "description": policy.description,
+                    "mechanisms": list(policy.mechanisms),
+                    "limitations": list(policy.limitations),
+                }
+                for policy in config.policies
+            ],
+            "metrics": [
+                {
+                    "id": metric.id,
+                    "unit": metric.unit,
+                    "direction": metric.direction,
+                    "description": metric.description,
+                }
+                for metric in config.metrics
+            ],
+            "variables": [
+                {
+                    "id": variable.id,
+                    "parameter": variable.parameter,
+                    "values": list(variable.values),
+                    "description": variable.description,
+                }
+                for variable in config.variables
+            ],
+            "hypotheses": [
+                {
+                    "id": hypothesis.id,
+                    "statement": hypothesis.statement,
+                    "independent_variable_ids": list(hypothesis.independent_variable_ids),
+                    "dependent_metric_ids": list(hypothesis.dependent_metric_ids),
+                }
+                for hypothesis in config.hypotheses
+            ],
             "seeds": sorted(config.seeds),
             "replications_per_seed": config.replications_per_seed,
             "warmup_runs": config.warmup_runs,
             "grid_mode": config.grid_mode,
             "ablations": list(config.ablations),
+            "evidence_boundary": (
+                "Deterministic discrete-event simulation only; logical time and synthetic "
+                "workloads are not production scheduler throughput or real GPU evidence."
+            ),
         },
     )
+    _write_json(environment_path, capture_environment())
+    _write_json(scenario_hashes_path, study_source_hashes(config))
+    _write_json(runs_json, {"schema_version": "1.0.0", "runs": completed})
     _write_json(summary_json, {"schema_version": "1.0.0", "summary": summary})
     _write_summary_csv(summary_csv, summary)
     return StudyArtifacts(
         output_directory=output,
         manifest=manifest_path,
+        environment=environment_path,
+        scenario_hashes=scenario_hashes_path,
+        runs_json=runs_json,
         summary_json=summary_json,
         summary_csv=summary_csv,
         run_count=len(completed),

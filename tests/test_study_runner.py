@@ -146,6 +146,12 @@ def test_every_completed_run_has_independent_manifest(tmp_path: Path) -> None:
     assert all(
         json.loads(path.read_text(encoding="utf-8"))["status"] == "complete" for path in manifests
     )
+    manifest = json.loads(artifacts.manifest.read_text(encoding="utf-8"))
+    assert isinstance(manifest["dirty_tree"], bool | type(None))
+    assert artifacts.environment.is_file()
+    assert artifacts.scenario_hashes.is_file()
+    assert artifacts.runs_json.is_file()
+    assert json.loads(artifacts.runs_json.read_text(encoding="utf-8"))["runs"]
 
 
 def _temporary_overlay(tmp_path: Path) -> Path:
