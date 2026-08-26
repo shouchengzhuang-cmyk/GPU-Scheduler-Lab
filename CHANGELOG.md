@@ -20,4 +20,8 @@
 - README 首屏明确研究问题、模拟边界和项目治理入口。
 - v1 adapter 明确过滤 CPU-only Task 与 unhealthy GPU，映射 model/topology，并接受、审计但不解释未知字段。
 
+### Security
+
+- 将开发测试依赖提升到 `pytest>=9.0.3,<10`，避免受 CVE-2025-71176 / GHSA-6w46-j5rx-g56g 影响的旧版本进入发布验证环境。
+
 `0.3.0` 条目是 release 准备事实；尚未自动创建 tag、GitHub Release 或部署。
