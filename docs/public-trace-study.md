@@ -53,13 +53,15 @@ The source `organization` field is used only as tenant identity. Queue path, que
 GPU-unit guarantee are synthetic experiment controls. They exist to exercise fair-share and
 reclaim policies consistently and must never be described as Alibaba production configuration.
 
-Fractional/non-integer GPU rows are counted and excluded because the simulator allocates integer
-GPU units. Rows with a GPU model outside the frozen memory-capacity map are counted and excluded
-rather than assigned a guessed capacity. Invalid and duplicate rows are also reported.
+The public node file exposes six labels, including anonymized `GPU-series-1` and `GPU-series-2`.
+B7 deliberately does not guess memory capacity for those anonymized labels. The frozen map covers
+A10, A100-SXM4-80GB, A800-SXM4-80GB, and H800; rows outside that auditable map are counted as
+model exclusions. Fractional/non-integer GPU rows are also counted and excluded because the
+simulator allocates integer GPU units. Invalid and duplicate rows are reported separately.
 
 ## Frozen replay contract
 
-`study/public-trace-study.yaml` pins the upstream commit, dataset version, six explicit GPU-memory
+`study/public-trace-study.yaml` pins the upstream commit, dataset version, four explicit GPU-memory
 mappings, three window quantiles, 24-hour logical windows, replay bounds, seed, policies,
 tenant-overlay strategy, and claim boundary. Changing any of these inputs is a methodology change.
 
