@@ -1,0 +1,50 @@
+name: Bug report
+description: 报告可复现的模拟器、指标或工具缺陷
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        安全漏洞请使用 Security Advisory。不要上传生产 trace、凭据或可识别租户的数据。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述
+      description: 说明实际行为、预期行为和受影响的策略或指标。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 最小复现
+      description: 提供 scenario、scheduler、seed 和完整命令；优先使用最小 synthetic fixture。
+      placeholder: |
+        commit: <sha>
+        command: <command>
+        scenario/seed: <value>
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境与版本
+      description: 操作系统、Python、包版本和关键依赖。
+    validations:
+      required: true
+  - type: dropdown
+    id: evidence
+    attributes:
+      label: 证据类型
+      options:
+        - SIMULATED
+        - REAL
+        - NOT RUN
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: 已脱敏输出
+      description: 退出码、trace 摘要、manifest 或失败断言；说明未覆盖范围。

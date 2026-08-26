@@ -4,6 +4,14 @@ GPU Scheduler Lab 是一个可复现、可测试、可 benchmark 的 GPU 集群�
 
 它是调度算法实验室，不连接真实 NVIDIA GPU、CUDA 或 Kubernetes，也不是生产调度器。
 
+Python distribution 与主 CLI 均使用 `gpu-scheduler-lab`，当前开发版本为 `0.3.0.dev0`；`python -m gpu_scheduler_lab` 是等价模块入口。
+
+## Research question
+
+**在固定、可复现的 workload 与容量/拓扑约束下，不同 GPU 调度策略如何在利用率、等待时间、SLA、公平性、碎片、抢占与恢复开销之间取舍？**
+
+所有比较必须复用同一输入和 simulation engine，并同时报告收益、代价与模型边界；本项目不把离散事件结果外推为真实 GPU 或生产 Kubernetes 性能。
+
 ## Why
 
 GPU 集群同时面对设备数量、异构显存、gang 作业、优先级和故障域等约束。集群即使有足够的总资源，也可能因为资源散落、显存型号不合适或低优先级作业占用而无法放置新作业。单看吞吐量无法揭示这些取舍，因此本项目以同一 workload 重放多种策略并输出可审计 trace 和指标。
@@ -47,6 +55,7 @@ cd '/mnt/d/Projects/GPU Scheduler Lab'
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e '.[dev]'
 
+.venv/bin/gpu-scheduler-lab --help
 .venv/bin/python -m gpu_scheduler_lab compare \
   --scenario scenarios/demo.yaml \
   --schedulers fifo,binpack,spread,preemptive
@@ -257,6 +266,17 @@ Phase II 双策略 simulation 段 wall time 为 19.070 s；含 Python 启动、w
 GitHub Actions 在 Ubuntu + Python 3.12 上执行同样四项检查，不需要 GPU 或外部服务。
 
 CI 还会运行 topology、backfill、Alibaba fixture，以及 Phase III borrowing/reclaim、historical fair-share、elastic gang 和 revocable fleet smoke；它不访问完整数据集。
+
+## Project governance
+
+- [License](LICENSE)
+- [Security policy](SECURITY.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
+- [Roadmap](ROADMAP.md)
+- [Version, release and deprecation policy](docs/release-policy.md)
+
+PR 必须明确研究问题或工程问题、非目标、验证方式、风险与证据边界。模拟结果标为 `SIMULATED`，真实外部运行才可标为 `REAL`，未执行项标为 `NOT RUN`。
 
 ## Limitations
 
