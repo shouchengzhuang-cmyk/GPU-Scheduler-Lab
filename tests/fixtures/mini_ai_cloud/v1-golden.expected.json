@@ -1,0 +1,63 @@
+{
+  "metadata": {
+    "source": "Mini-AI-Cloud",
+    "contract_version": "mini-ai-cloud.gpu-scheduler-lab/v1",
+    "cpu_only_tasks_filtered": 1,
+    "unhealthy_gpu_devices_filtered": 1,
+    "unknown_fields_ignored": {
+      "export": ["future_export_field"],
+      "worker": ["future_worker_field"],
+      "gpu_device": ["future_device_field"],
+      "task": ["future_task_field"]
+    }
+  },
+  "nodes": [
+    {
+      "id": "worker-a",
+      "schedulable": true,
+      "topology": {"zone": "zone-1", "rack": "rack-a"},
+      "gpus": [
+        {"id": "GPU-a0", "model": "A100-80GB", "memory_gb": 80.0}
+      ]
+    },
+    {
+      "id": "worker-b",
+      "schedulable": false,
+      "topology": {"zone": "zone-1", "rack": "rack-b"},
+      "gpus": [
+        {"id": "GPU-b0", "model": "L40S", "memory_gb": 48.0}
+      ]
+    }
+  ],
+  "jobs": [
+    {
+      "id": "training-a",
+      "arrival_time": 0.0,
+      "duration": 30.0,
+      "gpu_count": 1,
+      "gpu_memory_gb": 40.0,
+      "priority": "high",
+      "type": "training",
+      "gang": true,
+      "sla_deadline": 60.0,
+      "group": "project-a",
+      "gpu_model": "A100-80GB",
+      "topology_mode": "require_same_node",
+      "source_metadata": {
+        "mini_ai_cloud_unknown_fields_ignored": ["future_task_field"]
+      }
+    },
+    {
+      "id": "inference-b",
+      "arrival_time": 5.0,
+      "duration": 15.0,
+      "gpu_count": 1,
+      "gpu_memory_gb": 20.0,
+      "priority": "low",
+      "type": "inference",
+      "gang": false,
+      "group": "project-b",
+      "allowed_gpu_models": ["A100-80GB", "L40S"]
+    }
+  ]
+}

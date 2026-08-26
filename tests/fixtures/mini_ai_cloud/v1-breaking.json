@@ -1,0 +1,10 @@
+{
+  "contract_version": "mini-ai-cloud.gpu-scheduler-lab/v1",
+  "workers": [],
+  "tasks": [
+    {
+      "id": "gpu-task-without-memory",
+      "gpu_count": 1
+    }
+  ]
+}

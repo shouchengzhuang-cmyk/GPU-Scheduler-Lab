@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shouchengzhuang-cmyk/GPU-Scheduler-Lab/contracts/mini-ai-cloud-v1.schema.json",
+  "title": "Mini AI Cloud to GPU Scheduler Lab export v1",
+  "type": "object",
+  "required": ["contract_version", "workers", "tasks"],
+  "properties": {
+    "contract_version": {"const": "mini-ai-cloud.gpu-scheduler-lab/v1"},
+    "exported_at": {"type": "string", "format": "date-time"},
+    "producer": {"type": "string", "minLength": 1},
+    "workers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "gpu_devices"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "schedulable": {"type": "boolean", "default": true},
+          "labels": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          },
+          "gpu_devices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["memory_total_mb"],
+              "properties": {
+                "device_uuid": {"type": "string", "minLength": 1},
+                "memory_total_mb": {"type": "integer", "minimum": 1},
+                "health": {"type": "string", "minLength": 1, "default": "healthy"},
+                "model": {"type": "string", "minLength": 1, "default": "generic"}
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "gpu_count"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "project_id": {"type": "string", "minLength": 1},
+          "arrival_time": {
+            "oneOf": [
+              {"type": "number"},
+              {"type": "string", "format": "date-time"}
+            ]
+          },
+          "queued_at": {
+            "oneOf": [
+              {"type": "number"},
+              {"type": "string", "format": "date-time"}
+            ]
+          },
+          "duration_seconds": {"type": "number", "exclusiveMinimum": 0},
+          "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+          "gpu_count": {"type": "integer", "minimum": 0},
+          "gpu_memory_mb": {"type": "integer", "minimum": 1},
+          "priority": {"type": "integer", "minimum": 0, "maximum": 100},
+          "workload_type": {"type": "string", "minLength": 1},
+          "sla_deadline": {
+            "oneOf": [
+              {"type": "number"},
+              {"type": "string", "format": "date-time"}
+            ]
+          },
+          "gpu_model": {"type": "string", "minLength": 1},
+          "allowed_gpu_models": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          }
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"gpu_count": {"minimum": 1}}},
+            "then": {"required": ["gpu_memory_mb"]}
+          },
+          {"not": {"required": ["gpu_model", "allowed_gpu_models"]}}
+        ],
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

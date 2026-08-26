@@ -4,7 +4,7 @@ GPU Scheduler Lab 是一个可复现、可测试、可 benchmark 的 GPU 集群�
 
 它是调度算法实验室，不连接真实 NVIDIA GPU、CUDA 或 Kubernetes，也不是生产调度器。
 
-Python distribution 与主 CLI 均使用 `gpu-scheduler-lab`，当前开发版本为 `0.3.0.dev0`；`python -m gpu_scheduler_lab` 是等价模块入口。
+Python distribution 与主 CLI 均使用 `gpu-scheduler-lab`，当前 release 准备版本为 `0.3.0`；`python -m gpu_scheduler_lab` 是等价模块入口。仓库只准备 release commit，不自动创建 tag 或 GitHub Release。
 
 ## Research question
 
@@ -156,6 +156,10 @@ python -m gpu_scheduler_lab study verify --input build/study/canonical
 `dirty_tree` 会明确记录运行时工作树状态。报告仍是离散事件 simulation 证据，不是
 真实 GPU、Kubernetes 或生产 scheduler throughput；CI small fixture 只验证完整生成链路。
 
+正式交付包的核心图由同一份机器汇总生成：
+
+![Canonical study policy overview](docs/assets/study-policy-overview.png)
+
 ## Scheduler invariant gates
 
 12 条 Phase III 调度不变量固定在 [`study/invariants.yaml`](study/invariants.yaml)。合同把每条
@@ -286,7 +290,7 @@ $$
 
 ## Mini-AI-Cloud integration
 
-本项目与 [Mini-AI-Cloud](https://github.com/shouchengzhuang-cmyk/Mini-AI-Cloud) 通过版本化文件契约联合：Worker GPU inventory 和 Task workload export 可转换为本项目 scenario，结果 JSON 可作为离线 policy study 证据。两边没有 Python import、数据库或服务运行时耦合。
+本项目与 [Mini-AI-Cloud](https://github.com/shouchengzhuang-cmyk/Mini-AI-Cloud) 通过版本化文件契约联合：Worker GPU inventory 和 Task workload export 可转换为本项目 scenario，结果 JSON 可作为离线 policy study 证据。两边没有 Python import、数据库或服务运行时耦合。输入与结果 handoff schema 分别为 [`contracts/mini-ai-cloud-v1.schema.json`](contracts/mini-ai-cloud-v1.schema.json) 和 [`contracts/result-handoff-v1.schema.json`](contracts/result-handoff-v1.schema.json)。
 
 ```bash
 .venv/bin/python -m gpu_scheduler_lab import-mini-ai-cloud \
@@ -295,6 +299,20 @@ $$
 ```
 
 字段映射和证据边界见 [Mini-AI-Cloud integration contract](docs/mini-ai-cloud-integration.md)。
+
+一键复现导入、模拟与 `SIMULATED` 结果交付：
+
+```bash
+python -m gpu_scheduler_lab import-mini-ai-cloud \
+  --input tests/fixtures/mini_ai_cloud/v1-golden.json \
+  --output build/mini-ai-cloud.golden.yaml
+python -m gpu_scheduler_lab compare \
+  --scenario build/mini-ai-cloud.golden.yaml \
+  --schedulers binpack,topology \
+  --output-dir build/mini-ai-cloud-result
+```
+
+正式 release 前逐项执行 [`docs/release-checklist.md`](docs/release-checklist.md)；命令成功不等于已经创建 release 或部署。
 
 ## Scale benchmark
 

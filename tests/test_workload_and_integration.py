@@ -7,8 +7,13 @@ import pytest
 import yaml
 
 from gpu_scheduler_lab.cli import main
-from gpu_scheduler_lab.integrations import import_mini_ai_cloud_export
-from gpu_scheduler_lab.scenario import load_scenario
+from gpu_scheduler_lab.integrations import (
+    RESULT_CONTRACT_VERSION,
+    import_mini_ai_cloud_export,
+    validate_mini_ai_cloud_export,
+    validate_result_handoff,
+)
+from gpu_scheduler_lab.scenario import load_scenario, scenario_to_dict
 from gpu_scheduler_lab.workload import GeneratorConfig, generate_scenario
 
 
@@ -125,9 +130,55 @@ def test_mini_ai_cloud_contract_requires_gpu_memory() -> None:
     try:
         import_mini_ai_cloud_export(payload)
     except ValueError as exc:
-        assert "positive gpu_memory_mb" in str(exc)
+        assert "gpu_memory_mb must be >= 1" in str(exc)
     else:
         raise AssertionError("expected missing GPU memory to be rejected")
+
+
+def test_mini_ai_cloud_v1_golden_snapshot_is_compatible() -> None:
+    fixture = Path("tests/fixtures/mini_ai_cloud/v1-golden.json")
+    expected = Path("tests/fixtures/mini_ai_cloud/v1-golden.expected.json")
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+
+    scenario = import_mini_ai_cloud_export(payload)
+
+    assert scenario_to_dict(scenario) == json.loads(expected.read_text(encoding="utf-8"))
+
+
+def test_mini_ai_cloud_schema_breaking_fixture_fails_clearly() -> None:
+    fixture = Path("tests/fixtures/mini_ai_cloud/v1-breaking.json")
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+
+    with pytest.raises(ValueError, match=r"tasks\[0\]\.gpu_memory_mb must be an integer"):
+        validate_mini_ai_cloud_export(payload)
+
+
+def test_mini_ai_cloud_v1_unknown_fields_are_accepted_and_audited() -> None:
+    fixture = Path("tests/fixtures/mini_ai_cloud/v1-golden.json")
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+
+    scenario = import_mini_ai_cloud_export(payload)
+
+    assert scenario.metadata["unknown_fields_ignored"] == {
+        "export": ["future_export_field"],
+        "worker": ["future_worker_field"],
+        "gpu_device": ["future_device_field"],
+        "task": ["future_task_field"],
+    }
+
+
+def test_result_handoff_requires_simulated_evidence_label() -> None:
+    payload = {
+        "contract_version": RESULT_CONTRACT_VERSION,
+        "evidence_kind": "SIMULATED",
+        "limitations": ["simulation only"],
+        "results": [{"scheduler": "fifo", "elapsed_seconds": 0.0, "metrics": {}, "jobs": []}],
+    }
+    assert validate_result_handoff(payload)["evidence_kind"] == "SIMULATED"
+
+    payload["evidence_kind"] = "REAL"
+    with pytest.raises(ValueError, match="must be SIMULATED"):
+        validate_result_handoff(payload)
 
 
 def test_cli_writes_parseable_json_and_csv(tmp_path: Path) -> None:
@@ -146,7 +197,10 @@ def test_cli_writes_parseable_json_and_csv(tmp_path: Path) -> None:
     )
 
     with (output / "demo-compare.json").open(encoding="utf-8") as handle:
-        assert len(json.load(handle)["results"]) == 2
+        payload = json.load(handle)
+    assert payload["contract_version"] == RESULT_CONTRACT_VERSION
+    assert payload["evidence_kind"] == "SIMULATED"
+    assert len(payload["results"]) == 2
     rows = (output / "demo-compare.csv").read_text(encoding="utf-8").splitlines()
     assert len(rows) == 3
 

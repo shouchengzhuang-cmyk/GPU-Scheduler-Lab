@@ -12,5 +12,5 @@ def test_package_cli_and_runtime_versions_are_consistent() -> None:
     project = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
 
     assert project["name"] == "gpu-scheduler-lab"
-    assert project["version"] == __version__ == version("gpu-scheduler-lab") == "0.3.0.dev0"
+    assert project["version"] == __version__ == version("gpu-scheduler-lab") == "0.3.0"
     assert project["scripts"] == {"gpu-scheduler-lab": "gpu_scheduler_lab.cli:main"}

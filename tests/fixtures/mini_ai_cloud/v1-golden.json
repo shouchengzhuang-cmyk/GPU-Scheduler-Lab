@@ -1,0 +1,76 @@
+{
+  "contract_version": "mini-ai-cloud.gpu-scheduler-lab/v1",
+  "producer": "mini-ai-cloud/0.4.0",
+  "future_export_field": "accepted-and-ignored",
+  "workers": [
+    {
+      "id": "worker-a",
+      "schedulable": true,
+      "labels": {"zone": "zone-1", "rack": "rack-a"},
+      "future_worker_field": 1,
+      "gpu_devices": [
+        {
+          "device_uuid": "GPU-a0",
+          "memory_total_mb": 81920,
+          "health": "healthy",
+          "model": "A100-80GB",
+          "future_device_field": true
+        },
+        {
+          "device_uuid": "GPU-a1",
+          "memory_total_mb": 81920,
+          "health": "unhealthy",
+          "model": "A100-80GB"
+        }
+      ]
+    },
+    {
+      "id": "worker-b",
+      "schedulable": false,
+      "labels": {"zone": "zone-1", "rack": "rack-b"},
+      "gpu_devices": [
+        {
+          "device_uuid": "GPU-b0",
+          "memory_total_mb": 49152,
+          "health": "healthy",
+          "model": "L40S"
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "cpu-only",
+      "queued_at": "2026-08-26T00:00:00Z",
+      "gpu_count": 0
+    },
+    {
+      "id": "training-a",
+      "project_id": "project-a",
+      "queued_at": "2026-08-26T00:00:05Z",
+      "duration_seconds": 30,
+      "gpu_count": 1,
+      "gpu_memory_mb": 40960,
+      "gpu_model": "A100-80GB",
+      "priority": 75,
+      "workload_type": "training",
+      "sla_deadline": "2026-08-26T00:01:05Z",
+      "labels": {
+        "gpu_scheduler_lab/gang": "true",
+        "gpu_scheduler_lab/topology": "require_same_node"
+      },
+      "future_task_field": {"safe": true}
+    },
+    {
+      "id": "inference-b",
+      "project_id": "project-b",
+      "arrival_time": "2026-08-26T00:00:10+00:00",
+      "timeout_seconds": 15,
+      "gpu_count": 1,
+      "gpu_memory_mb": 20480,
+      "allowed_gpu_models": ["A100-80GB", "L40S"],
+      "priority": 24,
+      "workload_type": "model_inference"
+    }
+  ]
+}
