@@ -1,0 +1,72 @@
+version: 1
+golden:
+  cases: study/golden/cases.yaml
+  baseline: study/golden/logical-metrics.json
+invariants:
+  - id: gpu-exclusive-ownership
+    assertion: A GPU is owned by at most one allocation at any logical time.
+    tests:
+      - tests/test_properties.py::test_ownership_invariant_from_trace
+    golden_cases: [gang-conservation]
+  - id: atomic-gang-allocation
+    assertion: A gang job receives its entire requested GPU set or receives no GPUs.
+    tests:
+      - tests/test_properties.py::test_resource_gang_completion_and_conservation_invariants
+    golden_cases: [gang-conservation]
+  - id: hierarchical-hard-limits
+    assertion: A queue allocation cannot exceed either its own or any ancestor hard limit.
+    tests:
+      - tests/test_phase3_queues_and_fairshare.py::test_deep_hierarchy_enforces_ancestor_limit
+      - tests/test_phase3_properties.py::test_random_queue_runs_respect_hard_limits_and_are_deterministic
+    golden_cases: [tenant-reclaim]
+  - id: no-borrow-ancestor-guarantees
+    assertion: No-borrow allocation is bounded by every configured guarantee on its ancestor path.
+    tests:
+      - tests/test_phase3_queues_and_fairshare.py::test_no_borrow_allows_descendant_to_use_parent_guarantee
+      - tests/test_phase3_queues_and_fairshare.py::test_no_borrow_honors_only_configured_guarantee_dimensions
+    golden_cases: []
+  - id: legal-entitlement-reclaim
+    assertion: Reclaim only removes borrowed work needed to restore a legal queue entitlement.
+    tests:
+      - tests/test_phase3_queues_and_fairshare.py::test_reclaim_does_not_take_in_guarantee_work_for_peer_borrowing
+      - tests/test_phase3_queues_and_fairshare.py::test_reclaim_does_not_exceed_borrowed_branch_budget
+    golden_cases: [tenant-reclaim]
+  - id: reclaim-target-within-guarantee
+    assertion: A reclaim target cannot consume more than its remaining reclaim entitlement.
+    tests:
+      - tests/test_phase3_queues_and_fairshare.py::test_reclaim_target_must_fit_remaining_entitlement
+    golden_cases: [tenant-reclaim]
+  - id: required-topology-on-start-and-resize
+    assertion: Required same-node and same-rack constraints hold for initial placement and elastic resize.
+    tests:
+      - tests/test_properties.py::test_required_topology_is_never_violated
+      - tests/test_phase3_elastic_and_fleet.py::test_elastic_scale_up_preserves_required_topology
+    golden_cases: []
+  - id: unavailable-capacity-excluded
+    assertion: Unavailable capacity is excluded from current placement and schedulable capacity.
+    tests:
+      - tests/test_phase3_elastic_and_fleet.py::test_placement_schedulers_ignore_unavailable_nodes
+      - tests/test_phase3_queues_and_fairshare.py::test_admission_rejects_unavailable_capacity_without_future_return
+    golden_cases: [revocable-recovery]
+  - id: fleet-snapshots-not-unioned
+    assertion: Mutually exclusive schedulable fleet snapshots are never summed into synthetic capacity.
+    tests:
+      - tests/test_phase3_elastic_and_fleet.py::test_admission_does_not_union_capacity_from_disjoint_fleet_intervals
+      - tests/test_phase2_experiments.py::test_tenant_overlay_does_not_union_disjoint_fleet_capacity
+    golden_cases: [revocable-recovery]
+  - id: draining-capacity-remains-active
+    assertion: Occupied draining nodes remain in active-capacity utilization until their last allocation leaves.
+    tests:
+      - tests/test_phase3_elastic_and_fleet.py::test_draining_running_node_counts_as_utilized_active_capacity
+      - tests/test_phase3_elastic_and_fleet.py::test_drained_node_leaves_capacity_denominator_after_last_job
+    golden_cases: []
+  - id: fairshare-resorts-after-allocation
+    assertion: Dynamic fair-share pending order is recomputed after every successful allocation.
+    tests:
+      - tests/test_invariant_contract.py::test_fairshare_resorts_after_each_allocation
+    golden_cases: [tenant-reclaim]
+  - id: stale-completion-generation-fenced
+    assertion: A completion event from an older run generation cannot release a newer allocation.
+    tests:
+      - tests/test_invariant_contract.py::test_old_completion_cannot_release_new_generation
+    golden_cases: [revocable-recovery]

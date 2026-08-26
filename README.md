@@ -156,6 +156,21 @@ python -m gpu_scheduler_lab study verify --input build/study/canonical
 `dirty_tree` 会明确记录运行时工作树状态。报告仍是离散事件 simulation 证据，不是
 真实 GPU、Kubernetes 或生产 scheduler throughput；CI small fixture 只验证完整生成链路。
 
+## Scheduler invariant gates
+
+12 条 Phase III 调度不变量固定在 [`study/invariants.yaml`](study/invariants.yaml)。合同把每条
+不变量关联到语义断言测试，并用 3 个 canonical golden scenario 固定确定性的逻辑指标；
+golden baseline 不替代 property/semantic tests。CI 执行：
+
+```bash
+.venv/bin/python -m gpu_scheduler_lab.study.invariants --config study/invariants.yaml
+.venv/bin/python scripts/update_invariant_baselines.py
+```
+
+基线变化时，第二条命令会失败并输出 unified diff。只有审查该 diff 后才应显式执行
+`python scripts/update_invariant_baselines.py --write` 接受新基线。wall-clock 仅设 30 秒宽松
+guardrail；正式结果仍只使用 simulator logical time，不把 CI 机器速度作为性能结论。
+
 ## Scheduling policies
 
 ### FIFO / First Fit

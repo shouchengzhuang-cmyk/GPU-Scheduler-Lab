@@ -1,0 +1,30 @@
+version: 1
+cases:
+  - id: gang-conservation
+    scenario: scenarios/demo.yaml
+    scheduler: fifo
+    metrics:
+      - completed_jobs
+      - simulation_horizon
+      - busy_gpu_time
+      - idle_gpu_time
+      - topology_requirement_violation_count
+  - id: tenant-reclaim
+    scenario: scenarios/multi-tenant-borrow-reclaim.yaml
+    scheduler: fairshare-reclaim
+    metrics:
+      - completed_jobs
+      - simulation_horizon
+      - busy_gpu_time
+      - guarantee_satisfaction_variance
+      - queue_service_jains_index
+  - id: revocable-recovery
+    scenario: scenarios/revocable-fleet.yaml
+    scheduler: historical-drf
+    metrics:
+      - completed_jobs
+      - simulation_horizon
+      - capacity_revoke_count
+      - capacity_return_count
+      - jobs_affected_by_capacity_loss
+      - recovery_overhead
