@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from gpu_scheduler_lab.experiments import run_experiment
-from gpu_scheduler_lab.integrations.mini_ai_cloud import import_mini_ai_cloud_export
+from gpu_scheduler_lab.integrations.mini_ai_cloud import (
+    RESULT_CONTRACT_VERSION,
+    import_mini_ai_cloud_export,
+    validate_result_handoff,
+)
 from gpu_scheduler_lab.scenario import Scenario, load_scenario, write_scenario
 from gpu_scheduler_lab.schedulers import create_scheduler
 from gpu_scheduler_lab.simulator.engine import SimulationResult, Simulator
@@ -94,8 +98,14 @@ def _write_outputs(
     json_path = output_dir / f"{stem}.json"
     csv_path = output_dir / f"{stem}.csv"
     payload = {
+        "contract_version": RESULT_CONTRACT_VERSION,
+        "evidence_kind": "SIMULATED",
+        "limitations": [
+            "Discrete-event simulation; not a real GPU, Kubernetes, or production scheduler result."
+        ],
         "results": [result.to_dict(include_trace=True) for result in results],
     }
+    validate_result_handoff(payload)
     with json_path.open("w", encoding="utf-8", newline="\n") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
         handle.write("\n")
