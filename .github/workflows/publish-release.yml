@@ -1,0 +1,255 @@
+name: Publish approved release
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: publish-gpu-scheduler-lab-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.issue.pull_request == null &&
+      github.event.comment.author_association == 'OWNER' &&
+      github.event.comment.user.login == github.repository_owner &&
+      startsWith(github.event.comment.body, '/publish-release ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      RELEASE_VERSION: 0.3.0
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Parse explicit owner authorization
+        id: approval
+        shell: bash
+        env:
+          RELEASE_COMMENT: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          read -r command version target_sha extra <<<"${RELEASE_COMMENT}"
+          test "${command}" = "/publish-release"
+          test "${version}" = "${RELEASE_VERSION}"
+          test -z "${extra:-}"
+          [[ "${target_sha}" =~ ^[0-9a-f]{40}$ ]]
+          echo "target_sha=${target_sha}" >>"${GITHUB_OUTPUT}"
+          echo "tag=v${version}" >>"${GITHUB_OUTPUT}"
+
+      - name: Record publication start
+        shell: bash
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --body "Release publication started for GPU Scheduler Lab v${RELEASE_VERSION} at commit \`${{ steps.approval.outputs.target_sha }}\`. This publishes simulated-study artifacts only and performs no deployment."
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ steps.approval.outputs.target_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Verify release target is the current default-branch head
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.approval.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test "${main_sha}" = "${TARGET_SHA}"
+          test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+
+      - name: Require successful CI for the exact SHA
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.approval.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          count="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs" \
+            -f head_sha="${TARGET_SHA}" -f per_page=100 \
+            --jq '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")] | length')"
+          test "${count}" -ge 1 || {
+            echo "No successful CI run found for ${TARGET_SHA}" >&2
+            exit 1
+          }
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install release dependencies
+        run: python -m pip install -e '.[dev]'
+
+      - name: Validate immutable Action pins and release identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          import importlib.metadata
+          import re
+          from pathlib import Path
+
+          assert importlib.metadata.version("gpu-scheduler-lab") == "0.3.0"
+          failures = []
+          pattern = re.compile(r"^\s*-?\s*uses:\s*([^\s@]+)@([^\s#]+)")
+          for workflow in sorted(Path(".github/workflows").glob("*.yml")):
+              for line_number, line in enumerate(workflow.read_text(encoding="utf-8").splitlines(), 1):
+                  match = pattern.match(line)
+                  if match and not match.group(1).startswith("./") and not re.fullmatch(r"[0-9a-f]{40}", match.group(2)):
+                      failures.append(f"{workflow}:{line_number}: {match.group(0).strip()}")
+          if failures:
+              raise SystemExit("Unpinned GitHub Actions:\n" + "\n".join(failures))
+          PY
+
+      - name: Run complete quality and deterministic study gates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ruff format --check .
+          ruff check .
+          mypy .
+          pytest
+          make reproduce-study
+
+      - name: Verify the canonical study is bound to the release commit
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.approval.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path("build/study/canonical/manifest.json").read_text(encoding="utf-8"))
+          git = manifest.get("git", {})
+          if git.get("sha") != os.environ["TARGET_SHA"]:
+              raise SystemExit(f"study manifest SHA mismatch: {git.get('sha')}")
+          if git.get("dirty_tree") is not False:
+              raise SystemExit("study manifest is not from a clean tree")
+          PY
+          python -m gpu_scheduler_lab study verify --input build/study/canonical
+
+      - name: Build and install the release wheel in isolation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf dist build/release-wheel-venv
+          python -m build --wheel
+          python -m venv build/release-wheel-venv
+          build/release-wheel-venv/bin/python -m pip install dist/*.whl
+          build/release-wheel-venv/bin/gpu-scheduler-lab --help >/dev/null
+          build/release-wheel-venv/bin/python - <<'PY'
+          import importlib.metadata
+          import gpu_scheduler_lab
+
+          assert importlib.metadata.version("gpu-scheduler-lab") == "0.3.0"
+          assert gpu_scheduler_lab.__version__ == "0.3.0"
+          PY
+
+      - name: Prepare deterministic study and release assets
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.approval.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          test -f build/study/canonical/manifest.json
+          test -f build/study/canonical/summary.json
+          test -f build/study/canonical/hashes.sha256
+          test -n "$(find dist -maxdepth 1 -name 'gpu_scheduler_lab-*.whl' -print -quit)"
+
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -czf "build/gpu-scheduler-lab-v${RELEASE_VERSION}-study.tar.gz" \
+            -C build/study canonical
+
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          sha = os.environ["TARGET_SHA"]
+          notes = f"""# GPU Scheduler Lab v{os.environ['RELEASE_VERSION']}
+
+This release publishes a deterministic, reproducible **discrete-event simulation study** from exact default-branch commit `{sha}`.
+
+## Included
+
+- Python wheel and isolated CLI installation smoke evidence.
+- Canonical study manifest, summaries, report, figures and hash list.
+- Heterogeneous/topology-aware placement, fair-share, reclaim, elastic gang and revocable-fleet simulation capabilities.
+- Mini AI Cloud v1 offline file-contract compatibility.
+
+## Evidence boundary
+
+- Evidence kind: **SIMULATED**.
+- Real NVIDIA GPU / CUDA / NCCL execution: **NOT RUN**.
+- Kubernetes or production scheduler validation: **NOT RUN**.
+- Full public production trace study (B7): **NOT RUN**; bundled fixtures and documented adapters are retained.
+- Deployment: **NOT DEPLOYED**.
+
+The wall-clock benchmark measures this Python simulator only and must not be interpreted as production control-plane throughput.
+"""
+          Path("build/final-release-notes.md").write_text(notes, encoding="utf-8", newline="\n")
+          PY
+
+          sha256sum \
+            dist/gpu_scheduler_lab-*.whl \
+            "build/gpu-scheduler-lab-v${RELEASE_VERSION}-study.tar.gz" \
+            >build/release-assets.sha256
+
+      - name: Create or repair the exact release tag and GitHub Release
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.approval.outputs.target_sha }}
+          RELEASE_TAG: ${{ steps.approval.outputs.tag }}
+        run: |
+          set -Eeuo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --force --tags origin
+
+          if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+            test "$(git rev-list -n1 "${RELEASE_TAG}")" = "${TARGET_SHA}"
+          else
+            git tag -a "${RELEASE_TAG}" "${TARGET_SHA}" -m "GPU Scheduler Lab ${RELEASE_TAG}"
+            git push origin "refs/tags/${RELEASE_TAG}"
+          fi
+
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --title "GPU Scheduler Lab ${RELEASE_TAG}" \
+              --notes-file build/final-release-notes.md \
+              --latest
+          else
+            gh release create "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --title "GPU Scheduler Lab ${RELEASE_TAG}" \
+              --notes-file build/final-release-notes.md \
+              --latest
+          fi
+
+          gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber \
+            dist/gpu_scheduler_lab-*.whl \
+            "build/gpu-scheduler-lab-v${RELEASE_VERSION}-study.tar.gz" \
+            build/release-assets.sha256
+
+      - name: Record successful publication
+        if: success()
+        shell: bash
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --body "✅ Published GPU Scheduler Lab v${RELEASE_VERSION} from \`${{ steps.approval.outputs.target_sha }}\` with wheel and deterministic canonical-study bundle. Evidence remains **SIMULATED**; real GPU/Kubernetes/full-public-trace evidence remains **NOT RUN**."
+
+      - name: Record publication failure
+        if: failure()
+        shell: bash
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --body "❌ GPU Scheduler Lab v${RELEASE_VERSION} publication failed. No deployment was attempted. Inspect workflow run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} before retrying the same owner authorization command."
