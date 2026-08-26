@@ -125,6 +125,21 @@ study 的封闭策略集合；通用 benchmark CLI 中存在的其他 scheduler 
 hypotheses 见 [`study/hypotheses.md`](study/hypotheses.md)。本合同只冻结实验设计，
 不生成结论，也不把逻辑时间或合成参数描述成硬件性能。
 
+## Scheduler invariant gates
+
+12 条 Phase III 调度不变量固定在 [`study/invariants.yaml`](study/invariants.yaml)。合同把每条
+不变量关联到语义断言测试，并用 3 个 canonical golden scenario 固定确定性的逻辑指标；
+golden baseline 不替代 property/semantic tests。CI 执行：
+
+```bash
+.venv/bin/python -m gpu_scheduler_lab.study.invariants --config study/invariants.yaml
+.venv/bin/python scripts/update_invariant_baselines.py
+```
+
+基线变化时，第二条命令会失败并输出 unified diff。只有审查该 diff 后才应显式执行
+`python scripts/update_invariant_baselines.py --write` 接受新基线。wall-clock 仅设 30 秒宽松
+guardrail；正式结果仍只使用 simulator logical time，不把 CI 机器速度作为性能结论。
+
 ## Scheduling policies
 
 ### FIFO / First Fit
