@@ -1,16 +1,29 @@
 # Public trace study
 
-This repository keeps the normal fixture-based trace checks small and deterministic. The optional
-B7 evidence path uses the complete public Alibaba `cluster-trace-v2026-spot-gpu` source files for
-input provenance and normalization coverage, then runs frozen, bounded replay windows through the
-discrete-event simulator.
+This repository keeps normal fixture-based checks small and deterministic. The optional B7 path
+uses the complete public Alibaba `cluster-trace-v2026-spot-gpu` inputs for provenance and
+normalization coverage, then runs frozen bounded replay windows through the discrete-event
+simulator.
 
 ## Evidence semantics
 
-The output is always labeled `SIMULATED_TRACE_REPLAY`. It is not evidence from a real NVIDIA GPU,
-Kubernetes cluster, vLLM server, or Alibaba production scheduler. The public CSV files are never
-committed to this repository, and the result bundle contains only source hashes, normalization
-counts, frozen configuration, aggregate simulator metrics, a report, and bundle hashes.
+Every result is labeled `SIMULATED_TRACE_REPLAY`. It is not evidence from a real NVIDIA GPU,
+Kubernetes cluster, vLLM server, Alibaba production scheduler, or production control plane. The
+raw upstream README and CSV files are not committed. The result bundle contains source identity
+and hashes, normalization counts, frozen configuration, aggregate simulator metrics, a report,
+and bundle hashes.
+
+## Pinned source and attribution
+
+B7 pins Alibaba `alibaba/clusterdata` at commit
+`c08f563115af39bad047353431bf745b4dee665c`. The downloader fetches the upstream `README.md`,
+`node_info_df.csv`, and `job_info_df.csv` from that exact revision and records SHA-256 for all
+three. The pinned README travels only in the ignored local data directory; its hash is retained in
+the evidence manifest so the attribution/citation context can be identified later.
+
+The upstream directory does not provide this project with an independent data license to
+relicense. Review the pinned upstream README, its paper citation, and current upstream terms before
+reusing or redistributing the dataset. This repository does not redistribute the full trace.
 
 ## Reproduce locally
 
@@ -25,40 +38,39 @@ cd build/public-trace-study
 sha256sum -c hashes.sha256
 ```
 
-The downloader records SHA-256 for every source CSV. The study runner refuses to continue if the
-files do not match the manifest or if the manifest dataset version does not match the frozen study
-configuration.
+The study runner refuses to continue if the manifest dataset version or pinned upstream revision
+differs from the frozen study config, if a required file is missing, or if any downloaded file
+fails SHA-256 verification.
 
 ## What is original and what is synthetic
 
 Original source fields include node identity, GPU model/capacity, CPU capacity, job identity,
 organization, resource requests, worker count, submit time, duration, and HP/Spot class. The
 adapter derives simulator arrival time, aggregate integer GPU count, priority, and GPU-memory
-capacity from frozen mappings.
+capacity from the frozen mappings.
 
-The source `organization` field is used as tenant identity, but the queue path, queue weight, and
-equal GPU-unit guarantee are synthetic experiment controls. They exist only to exercise the
-fair-share and reclaim policies consistently. They must never be described as Alibaba production
-configuration.
+The source `organization` field is used only as tenant identity. Queue path, queue weight, and equal
+GPU-unit guarantee are synthetic experiment controls. They exist to exercise fair-share and
+reclaim policies consistently and must never be described as Alibaba production configuration.
 
-Fractional GPU rows are counted and excluded because the current simulator allocates integer GPU
-units. GPU models without an explicit memory-capacity mapping are also counted and excluded rather
-than assigned guessed capacity. The report records both exclusions.
+Fractional/non-integer GPU rows are counted and excluded because the simulator allocates integer
+GPU units. Rows with a GPU model outside the frozen memory-capacity map are counted and excluded
+rather than assigned a guessed capacity. Invalid and duplicate rows are also reported.
 
 ## Frozen replay contract
 
-`study/public-trace-study.yaml` pins the dataset version, allowed GPU-memory mappings, three window
-quantiles, 24-hour logical windows, replay bounds, seed, policies, tenant-overlay strategy, and
-claim boundary. Changing any of those inputs changes the study contract and should be reviewed as
-a methodology change.
+`study/public-trace-study.yaml` pins the upstream commit, dataset version, six explicit GPU-memory
+mappings, three window quantiles, 24-hour logical windows, replay bounds, seed, policies,
+tenant-overlay strategy, and claim boundary. Changing any of these inputs is a methodology change.
 
 The three windows are anchored at deterministic quantiles of distinct eligible submit times. The
 source files are ingested in full for hashing and normalization statistics, while each simulator
-window is bounded so the experiment remains affordable and repeatable in GitHub Actions.
+window is bounded so the experiment remains affordable and repeatable.
 
 ## GitHub Actions
 
-`.github/workflows/public-trace-study.yml` is intentionally separate from normal CI. It is manually
-dispatchable and, while B7 is under development, also runs on pushes to the dedicated B7 branch.
-The workflow downloads the public trace, runs the frozen study, verifies `hashes.sha256`, checks the
-evidence marker, and uploads the result bundle as a workflow artifact.
+`.github/workflows/public-trace-study.yml` is intentionally separate from normal fixture CI. It is
+manually dispatchable and also validates relevant B7 branch/PR changes. The workflow downloads the
+pinned public source, runs the frozen study, verifies `hashes.sha256`, checks the evidence marker
+and pinned revision, confirms raw CSVs are absent from the output bundle, and uploads the bundle as
+a workflow artifact.
