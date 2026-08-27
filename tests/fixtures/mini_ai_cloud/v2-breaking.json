@@ -1,0 +1,20 @@
+{
+  "contract_version": "mini-ai-cloud.gpu-scheduler-lab/v2",
+  "workers": [
+    {
+      "id": "worker-bad",
+      "gpu_devices": [
+        {
+          "device_uuid": "bad-pair",
+          "vendor": "huawei-ascend",
+          "kind": "gpu",
+          "model": "invalid",
+          "memory_total_mb": 1024,
+          "runtime_profiles": [],
+          "capabilities": []
+        }
+      ]
+    }
+  ],
+  "tasks": []
+}

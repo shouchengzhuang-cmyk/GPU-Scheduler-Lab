@@ -6,6 +6,11 @@ from enum import IntEnum, StrEnum
 from typing import Any
 
 from gpu_scheduler_lab.elastic.work import ElasticSpec
+from gpu_scheduler_lab.models.accelerator import (
+    AcceleratorKind,
+    AcceleratorSelectionPolicy,
+    AcceleratorVendor,
+)
 from gpu_scheduler_lab.models.topology import TopologyMode
 
 
@@ -53,6 +58,13 @@ class Job:
     group: str | None = None
     gpu_model: str | None = None
     allowed_gpu_models: tuple[str, ...] = ()
+    allowed_vendors: tuple[AcceleratorVendor, ...] = ()
+    allowed_kinds: tuple[AcceleratorKind, ...] = ()
+    allowed_models: tuple[str, ...] = ()
+    required_capabilities: tuple[str, ...] = ()
+    runtime_profile: str | None = None
+    selection_policy: AcceleratorSelectionPolicy = AcceleratorSelectionPolicy.ANY
+    accelerator_request_explicit: bool = False
     topology_mode: TopologyMode = TopologyMode.NONE
     checkpoint_cost: float = 0.0
     restart_cost: float = 0.0
@@ -90,6 +102,12 @@ class Job:
         if isinstance(self.topology_mode, str):
             self.topology_mode = TopologyMode(self.topology_mode)
         self.allowed_gpu_models = tuple(self.allowed_gpu_models)
+        self.allowed_vendors = tuple(AcceleratorVendor(value) for value in self.allowed_vendors)
+        self.allowed_kinds = tuple(AcceleratorKind(value) for value in self.allowed_kinds)
+        self.allowed_models = tuple(self.allowed_models)
+        self.required_capabilities = tuple(self.required_capabilities)
+        if isinstance(self.selection_policy, str):
+            self.selection_policy = AcceleratorSelectionPolicy(self.selection_policy)
         if not self.id:
             raise ValueError("job id must not be empty")
         if not self.queue_id:
@@ -122,6 +140,19 @@ class Job:
             raise ValueError("gpu_model must not be empty")
         if any(not model for model in self.allowed_gpu_models):
             raise ValueError("allowed_gpu_models must not contain empty values")
+        accelerator_lists = {
+            "allowed_vendors": self.allowed_vendors,
+            "allowed_kinds": self.allowed_kinds,
+            "allowed_models": self.allowed_models,
+            "required_capabilities": self.required_capabilities,
+        }
+        for name, values in accelerator_lists.items():
+            if any(not value for value in values):
+                raise ValueError(f"{name} must not contain empty values")
+            if len(set(values)) != len(values):
+                raise ValueError(f"{name} must not contain duplicates")
+        if self.runtime_profile == "":
+            raise ValueError("runtime_profile must not be empty")
         if self.checkpoint_cost < 0 or self.restart_cost < 0:
             raise ValueError("preemption costs must be non-negative")
         self.requested_replicas = (
@@ -204,6 +235,31 @@ class Job:
             group=str(data["group"]) if data.get("group") is not None else None,
             gpu_model=str(data["gpu_model"]) if data.get("gpu_model") is not None else None,
             allowed_gpu_models=tuple(str(value) for value in data.get("allowed_gpu_models", [])),
+            allowed_vendors=tuple(
+                AcceleratorVendor(str(value)) for value in data.get("allowed_vendors", [])
+            ),
+            allowed_kinds=tuple(
+                AcceleratorKind(str(value)) for value in data.get("allowed_kinds", [])
+            ),
+            allowed_models=tuple(str(value) for value in data.get("allowed_models", [])),
+            required_capabilities=tuple(
+                str(value) for value in data.get("required_capabilities", [])
+            ),
+            runtime_profile=(
+                str(data["runtime_profile"]) if data.get("runtime_profile") is not None else None
+            ),
+            selection_policy=AcceleratorSelectionPolicy(str(data.get("selection_policy", "any"))),
+            accelerator_request_explicit=any(
+                name in data
+                for name in (
+                    "allowed_vendors",
+                    "allowed_kinds",
+                    "allowed_models",
+                    "required_capabilities",
+                    "runtime_profile",
+                    "selection_policy",
+                )
+            ),
             topology_mode=TopologyMode(str(data.get("topology_mode", "none"))),
             checkpoint_cost=float(data.get("checkpoint_cost", 0.0)),
             restart_cost=float(data.get("restart_cost", 0.0)),
@@ -226,6 +282,13 @@ class Job:
             group=self.group,
             gpu_model=self.gpu_model,
             allowed_gpu_models=self.allowed_gpu_models,
+            allowed_vendors=self.allowed_vendors,
+            allowed_kinds=self.allowed_kinds,
+            allowed_models=self.allowed_models,
+            required_capabilities=self.required_capabilities,
+            runtime_profile=self.runtime_profile,
+            selection_policy=self.selection_policy,
+            accelerator_request_explicit=self.accelerator_request_explicit,
             topology_mode=self.topology_mode,
             checkpoint_cost=self.checkpoint_cost,
             restart_cost=self.restart_cost,

@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from gpu_scheduler_lab.integrations import CONTRACT_VERSION, RESULT_CONTRACT_VERSION
+from gpu_scheduler_lab.integrations import (
+    CONTRACT_V2_VERSION,
+    CONTRACT_VERSION,
+    RESULT_CONTRACT_VERSION,
+)
 
 
 def _schema(name: str) -> dict[str, Any]:
@@ -20,6 +24,27 @@ def test_input_schema_freezes_v1_and_allows_forward_compatible_fields() -> None:
     worker = schema["properties"]["workers"]["items"]
     task = schema["properties"]["tasks"]["items"]
     assert worker["additionalProperties"] is True
+    assert task["additionalProperties"] is True
+
+
+def test_input_schema_freezes_typed_v2_and_vendor_kind_pairs() -> None:
+    schema = _schema("mini-ai-cloud-v2.schema.json")
+
+    assert schema["properties"]["contract_version"]["const"] == CONTRACT_V2_VERSION
+    worker = schema["properties"]["workers"]["items"]
+    device = worker["properties"]["gpu_devices"]["items"]
+    task = schema["properties"]["tasks"]["items"]
+    assert set(device["required"]) == {
+        "vendor",
+        "kind",
+        "model",
+        "memory_total_mb",
+        "runtime_profiles",
+        "capabilities",
+    }
+    assert len(device["oneOf"]) == 2
+    assert task["properties"]["selection_policy"]["const"] == "any"
+    assert device["additionalProperties"] is True
     assert task["additionalProperties"] is True
 
 

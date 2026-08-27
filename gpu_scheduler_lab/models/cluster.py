@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from gpu_scheduler_lab.models.accelerator import AcceleratorKind, AcceleratorVendor
 from gpu_scheduler_lab.models.job import Job
 
 
@@ -14,10 +15,21 @@ class GPU:
     node_id: str
     memory_capacity_gb: float
     model: str = "generic"
+    vendor: AcceleratorVendor = AcceleratorVendor.UNKNOWN
+    kind: AcceleratorKind = AcceleratorKind.GPU
+    runtime_profiles: tuple[str, ...] = ()
+    capabilities: tuple[str, ...] = ()
+    accelerator_metadata_inferred: bool = True
     allocated_memory_gb: float = 0.0
     owner_job_id: str | None = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.vendor, str):
+            self.vendor = AcceleratorVendor(self.vendor)
+        if isinstance(self.kind, str):
+            self.kind = AcceleratorKind(self.kind)
+        self.runtime_profiles = tuple(self.runtime_profiles)
+        self.capabilities = tuple(self.capabilities)
         if not self.id:
             raise ValueError("gpu id must not be empty")
         if not math.isfinite(self.memory_capacity_gb) or self.memory_capacity_gb <= 0:
@@ -26,6 +38,14 @@ class GPU:
             raise ValueError("allocated GPU memory must be finite and non-negative")
         if not self.model:
             raise ValueError("GPU model must not be empty")
+        if any(not profile for profile in self.runtime_profiles):
+            raise ValueError("runtime_profiles must not contain empty values")
+        if len(set(self.runtime_profiles)) != len(self.runtime_profiles):
+            raise ValueError("runtime_profiles must not contain duplicates")
+        if any(not capability for capability in self.capabilities):
+            raise ValueError("capabilities must not contain empty values")
+        if len(set(self.capabilities)) != len(self.capabilities):
+            raise ValueError("capabilities must not contain duplicates")
 
     @property
     def occupied(self) -> bool:
@@ -234,6 +254,11 @@ class Cluster:
                             node_id=gpu.node_id,
                             memory_capacity_gb=gpu.memory_capacity_gb,
                             model=gpu.model,
+                            vendor=gpu.vendor,
+                            kind=gpu.kind,
+                            runtime_profiles=gpu.runtime_profiles,
+                            capabilities=gpu.capabilities,
+                            accelerator_metadata_inferred=gpu.accelerator_metadata_inferred,
                             allocated_memory_gb=(
                                 gpu.allocated_memory_gb if preserve_allocations else 0.0
                             ),
@@ -257,6 +282,18 @@ class Cluster:
                     node_id=node_id,
                     memory_capacity_gb=float(gpu_data["memory_gb"]),
                     model=str(gpu_data.get("model", "generic")),
+                    vendor=AcceleratorVendor(str(gpu_data.get("vendor", "unknown"))),
+                    kind=AcceleratorKind(str(gpu_data.get("kind", "gpu"))),
+                    runtime_profiles=tuple(
+                        str(value) for value in gpu_data.get("runtime_profiles", [])
+                    ),
+                    capabilities=tuple(str(value) for value in gpu_data.get("capabilities", [])),
+                    accelerator_metadata_inferred=bool(
+                        gpu_data.get(
+                            "accelerator_metadata_inferred",
+                            "vendor" not in gpu_data and "kind" not in gpu_data,
+                        )
+                    ),
                 )
                 for index, gpu_data in enumerate(node_data.get("gpus", []))
             ]

@@ -8,6 +8,7 @@ import yaml
 
 from gpu_scheduler_lab.cli import main
 from gpu_scheduler_lab.integrations import (
+    CONTRACT_V2_VERSION,
     RESULT_CONTRACT_VERSION,
     import_mini_ai_cloud_export,
     validate_mini_ai_cloud_export,
@@ -145,12 +146,83 @@ def test_mini_ai_cloud_v1_golden_snapshot_is_compatible() -> None:
     assert scenario_to_dict(scenario) == json.loads(expected.read_text(encoding="utf-8"))
 
 
+def test_mini_ai_cloud_v1_marks_accelerator_metadata_inferred_without_guessing_vendor() -> None:
+    fixture = Path("tests/fixtures/mini_ai_cloud/v1-golden.json")
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+
+    scenario = import_mini_ai_cloud_export(payload)
+
+    assert {device.vendor.value for device in scenario.cluster.gpus} == {"unknown"}
+    assert {device.kind.value for device in scenario.cluster.gpus} == {"gpu"}
+    assert all(device.accelerator_metadata_inferred for device in scenario.cluster.gpus)
+
+
+def test_mini_ai_cloud_v2_golden_snapshot_preserves_typed_accelerators() -> None:
+    fixture = Path("tests/fixtures/mini_ai_cloud/v2-golden.json")
+    expected = Path("tests/fixtures/mini_ai_cloud/v2-golden.expected.json")
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+
+    scenario = import_mini_ai_cloud_export(payload)
+
+    assert scenario.metadata["contract_version"] == CONTRACT_V2_VERSION
+    assert scenario_to_dict(scenario) == json.loads(expected.read_text(encoding="utf-8"))
+    assert {device.vendor.value for device in scenario.cluster.gpus} == {
+        "nvidia",
+        "huawei-ascend",
+    }
+    assert {device.kind.value for device in scenario.cluster.gpus} == {"gpu", "npu"}
+    assert not any(device.accelerator_metadata_inferred for device in scenario.cluster.gpus)
+    assert scenario.jobs[0].gpu_model is None
+
+
 def test_mini_ai_cloud_schema_breaking_fixture_fails_clearly() -> None:
     fixture = Path("tests/fixtures/mini_ai_cloud/v1-breaking.json")
     payload = json.loads(fixture.read_text(encoding="utf-8"))
 
     with pytest.raises(ValueError, match=r"tasks\[0\]\.gpu_memory_mb must be an integer"):
         validate_mini_ai_cloud_export(payload)
+
+
+def test_mini_ai_cloud_v2_breaking_fixture_rejects_vendor_kind_mismatch() -> None:
+    fixture = Path("tests/fixtures/mini_ai_cloud/v2-breaking.json")
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+
+    with pytest.raises(ValueError, match="vendor and kind must form a supported pair"):
+        validate_mini_ai_cloud_export(payload)
+
+
+def test_mini_ai_cloud_v2_rejects_impossible_task_vendor_kind_pair() -> None:
+    fixture = Path("tests/fixtures/mini_ai_cloud/v2-golden.json")
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+    payload["tasks"][0]["allowed_kinds"] = ["npu"]
+
+    with pytest.raises(ValueError, match="must include a supported pair"):
+        validate_mini_ai_cloud_export(payload)
+
+
+def test_mini_ai_cloud_rejects_unknown_contract_version() -> None:
+    payload = {
+        "contract_version": "mini-ai-cloud.gpu-scheduler-lab/v3",
+        "workers": [],
+        "tasks": [],
+    }
+
+    with pytest.raises(ValueError, match="contract_version must be one of"):
+        validate_mini_ai_cloud_export(payload)
+
+
+def test_mini_ai_cloud_v2_unknown_fields_are_accepted_and_audited() -> None:
+    fixture = Path("tests/fixtures/mini_ai_cloud/v2-golden.json")
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+
+    scenario = import_mini_ai_cloud_export(payload)
+
+    assert scenario.metadata["unknown_fields_ignored"] == {
+        "export": ["future_export_field"],
+        "worker": ["future_worker_field"],
+        "accelerator_device": ["future_device_field"],
+        "task": ["future_task_field", "gpu_model"],
+    }
 
 
 def test_mini_ai_cloud_v1_unknown_fields_are_accepted_and_audited() -> None:

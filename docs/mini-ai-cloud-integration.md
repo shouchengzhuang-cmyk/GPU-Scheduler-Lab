@@ -2,7 +2,7 @@
 
 ## Boundary
 
-联合采用 `mini-ai-cloud.gpu-scheduler-lab/v1` JSON 文件契约。规范文件为 [`contracts/mini-ai-cloud-v1.schema.json`](../contracts/mini-ai-cloud-v1.schema.json)，运行时 adapter 以无第三方依赖的等价检查验证所有被消费字段。GPU Scheduler Lab 不连接 Mini-AI-Cloud 数据库/API，不导入其内部包，也不修改其调度状态。
+联合支持两版 JSON 文件契约：兼容版 `mini-ai-cloud.gpu-scheduler-lab/v1` 和类型化版 `mini-ai-cloud.gpu-scheduler-lab/v2`。规范文件分别为 [`contracts/mini-ai-cloud-v1.schema.json`](../contracts/mini-ai-cloud-v1.schema.json) 与 [`contracts/mini-ai-cloud-v2.schema.json`](../contracts/mini-ai-cloud-v2.schema.json)，运行时 adapter 以无第三方依赖的等价检查验证所有被消费字段。GPU Scheduler Lab 不连接 Mini-AI-Cloud 数据库/API，不导入其内部包，也不修改其调度状态。
 
 Mini-AI-Cloud 当前概念到 simulator 的映射：
 
@@ -26,23 +26,38 @@ Mini-AI-Cloud 当前概念到 simulator 的映射：
 | `gpu_model` / `allowed_gpu_models` | 同名 Job 约束 | 两者互斥；用于设备型号过滤 |
 | label `gpu_scheduler_lab/topology` | `topology_mode` | 接受 `none`、`prefer_same_node`、`prefer_same_rack`、`require_same_node`、`require_same_rack` |
 
+v2 在 v1 文件形状上增加类型化 accelerator 字段。为保持传输兼容，设备数组和 count/memory 字段在本版本仍沿用 `gpu_devices`、`gpu_count`、`gpu_memory_mb` 名称；`vendor`、`kind` 和新的任务约束才是厂商类型事实，adapter 不根据旧字段或型号猜测厂商。
+
+| v2 字段 | 内部字段 | 规则 |
+|---|---|---|
+| Device `vendor` / `kind` | GPU `vendor` / `kind` | 只接受 `nvidia+gpu`、`huawei-ascend+npu` |
+| Device `runtime_profiles` | GPU `runtime_profiles` | 非空 string 的去重数组 |
+| Device `capabilities` | GPU `capabilities` | 非空 string 的去重数组 |
+| Task `allowed_vendors` / `allowed_kinds` | Job 同名约束 | 只保存明确值，不从 model 推断 |
+| Task `allowed_models` | Job `allowed_models` | 与 legacy `allowed_gpu_models` 分开 |
+| Task `required_capabilities` | Job 同名约束 | B1 只承载合同，匹配行为属于 B2 |
+| Task `runtime_profile` | Job `runtime_profile` | 可为 null 或非空 string |
+| Task `selection_policy` | Job `selection_policy` | v2 固定为 `any` |
+
 ## Compatibility rules
 
-- `contract_version` 必须精确为 `mini-ai-cloud.gpu-scheduler-lab/v1`；未知版本明确失败，不猜测迁移。
+- `contract_version` 必须精确为 v1 或 v2；未知版本明确失败，不猜测迁移。
 - v1 已知且被 adapter 消费的字段执行类型、范围、唯一性与互斥检查。
-- 未知字段允许出现，以便生产者在 v1 内向前扩展；adapter 不解释其语义、不影响调度，只把未知字段名记录到 scenario metadata 或 Job `source_metadata`，未知值不会复制进结果。
+- v1 设备明确落为 `vendor=unknown`、`kind=gpu` 并设置 `accelerator_metadata_inferred=true`；即使 model 名包含 Ascend，也不得自动推断为华为昇腾。
+- v2 设备必须显式提供 vendor、kind、model、runtime profiles 和 capabilities；vendor-kind 错配 fail closed。
+- 未知字段允许出现，以便生产者在同一版本内向前扩展；adapter 不解释其语义、不影响调度，只把未知字段名记录到 scenario metadata 或 Job `source_metadata`，未知值不会复制进结果。
 - CPU-only Task 在时间基线计算前过滤；因此它不会把 GPU workload 的逻辑起点提前。
 - 只有 health 精确为 `healthy`（缺省也是 `healthy`）的设备进入 inventory。
 - 数值时间直接视为 epoch/逻辑秒；带时区 ISO-8601 转为 UTC epoch；无时区 ISO-8601 明确按 UTC 解释。
 - priority 固定映射为 0–24 low、25–74 normal、75–89 high、90–100 critical。
 
-`tests/fixtures/mini_ai_cloud/v1-golden.json` 与对应 expected snapshot 冻结完整映射；`v1-breaking.json` 证明破坏 GPU memory 必填约束时会明确失败。未来 v2 必须使用新 `contract_version` 和独立 schema；adapter 若增加 v2，仍必须保留 v1 golden compatibility test。
+v1/v2 各自拥有 golden、expected 和 breaking fixtures。v1 snapshot 冻结原始输出兼容；v2 snapshot 冻结 NVIDIA GPU 与华为昇腾 NPU 的显式类型，breaking fixture 证明 vendor-kind 错配会明确失败。
 
 ## Import and reproduce
 
 ```bash
 python -m gpu_scheduler_lab import-mini-ai-cloud \
-  --input tests/fixtures/mini_ai_cloud/v1-golden.json \
+  --input tests/fixtures/mini_ai_cloud/v2-golden.json \
   --output build/mini-ai-cloud.golden.yaml
 python -m gpu_scheduler_lab compare \
   --scenario build/mini-ai-cloud.golden.yaml \
@@ -64,6 +79,8 @@ Mini-AI-Cloud 可把它作为离线 policy study artifact 保存，但不得把 
 ## Non-goals
 
 - 不从生产数据库直接导出或回写；
+- 不把 v2 结果回写 Mini-AI-Cloud；文件合同是单向离线输入；
 - 不共享 SQLAlchemy/Pydantic 内部类；
+- 不在 B1 实现 vendor-aware placement、性能画像或跨厂商 fallback；这些属于 B2；
 - 不替代 Mini-AI-Cloud 的 transaction、reservation、lease、execution fencing；
 - 不声称模拟结果验证真实 Docker/Kubernetes/GPU runtime。

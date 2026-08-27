@@ -1,0 +1,79 @@
+{
+  "contract_version": "mini-ai-cloud.gpu-scheduler-lab/v2",
+  "producer": "mini-ai-cloud/0.5.0-dev",
+  "future_export_field": "accepted-and-audited",
+  "workers": [
+    {
+      "id": "worker-nvidia",
+      "schedulable": true,
+      "labels": {"zone": "zone-1"},
+      "future_worker_field": true,
+      "gpu_devices": [
+        {
+          "device_uuid": "GPU-a0",
+          "vendor": "nvidia",
+          "kind": "gpu",
+          "model": "A100-80GB",
+          "memory_total_mb": 81920,
+          "health": "healthy",
+          "runtime_profiles": ["nvidia-vllm-k8s"],
+          "capabilities": ["bf16", "tensor-parallel"],
+          "future_device_field": {"ignored": true}
+        }
+      ]
+    },
+    {
+      "id": "worker-ascend",
+      "schedulable": true,
+      "labels": {"zone": "zone-2"},
+      "gpu_devices": [
+        {
+          "device_uuid": "NPU-b0",
+          "vendor": "huawei-ascend",
+          "kind": "npu",
+          "model": "Ascend-910B",
+          "memory_total_mb": 65536,
+          "health": "healthy",
+          "runtime_profiles": ["ascend-vllm-k8s"],
+          "capabilities": ["bf16", "tensor-parallel"]
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "nvidia-inference",
+      "project_id": "project-a",
+      "arrival_time": 0,
+      "duration_seconds": 20,
+      "gpu_count": 1,
+      "gpu_memory_mb": 40960,
+      "priority": 80,
+      "workload_type": "model_inference",
+      "allowed_vendors": ["nvidia"],
+      "allowed_kinds": ["gpu"],
+      "allowed_models": ["A100-80GB"],
+      "required_capabilities": ["bf16"],
+      "runtime_profile": "nvidia-vllm-k8s",
+      "selection_policy": "any",
+      "gpu_model": {"must": "not-be-interpreted"},
+      "future_task_field": "ignored"
+    },
+    {
+      "id": "ascend-inference",
+      "project_id": "project-b",
+      "arrival_time": 5,
+      "duration_seconds": 15,
+      "gpu_count": 1,
+      "gpu_memory_mb": 32768,
+      "priority": 50,
+      "workload_type": "model_inference",
+      "allowed_vendors": ["huawei-ascend"],
+      "allowed_kinds": ["npu"],
+      "allowed_models": ["Ascend-910B"],
+      "required_capabilities": ["bf16"],
+      "runtime_profile": "ascend-vllm-k8s",
+      "selection_policy": "any"
+    }
+  ]
+}
