@@ -494,10 +494,19 @@ jobs:
           extract_root = root / "retained-study"
           with tarfile.open(archive, "r:gz") as bundle:
               members = bundle.getmembers()
+              member_paths = set()
               for member in members:
                   path = PurePosixPath(member.name)
                   assert not path.is_absolute() and ".." not in path.parts
+                  assert path.parts and path.parts[0] == "canonical", member.name
+                  normalized = path.as_posix()
+                  assert normalized not in member_paths, normalized
+                  member_paths.add(normalized)
                   assert member.isfile() or member.isdir(), member.name
+              assert any(
+                  member.isdir() and PurePosixPath(member.name).as_posix() == "canonical"
+                  for member in members
+              )
               manifest_file = bundle.extractfile("canonical/manifest.json")
               assert manifest_file is not None
               manifest = json.loads(manifest_file.read().decode("utf-8"))
