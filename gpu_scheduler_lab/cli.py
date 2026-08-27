@@ -331,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate.set_defaults(handler=_generate)
 
     importer = subparsers.add_parser(
-        "import-mini-ai-cloud", help="convert a Mini-AI-Cloud v1 file export"
+        "import-mini-ai-cloud", help="convert a Mini-AI-Cloud v1 or v2 file export"
     )
     importer.add_argument("--input", type=Path, required=True)
     importer.add_argument("--output", type=Path, required=True)
