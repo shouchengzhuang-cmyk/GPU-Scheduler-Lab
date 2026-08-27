@@ -202,10 +202,20 @@ jobs:
           Path("build/final-release-notes.md").write_text(notes, encoding="utf-8", newline="\n")
           PY
 
-          sha256sum \
-            dist/gpu_scheduler_lab-*.whl \
-            "build/gpu-scheduler-lab-v${RELEASE_VERSION}-study.tar.gz" \
-            >build/release-assets.sha256
+          mapfile -t wheel_assets < <(
+            find dist -maxdepth 1 -type f -name 'gpu_scheduler_lab-*.whl' -print | sort
+          )
+          test "${#wheel_assets[@]}" -eq 1
+          checksum_assets=(
+            "${wheel_assets[0]}"
+            "build/gpu-scheduler-lab-v${RELEASE_VERSION}-study.tar.gz"
+          )
+          : >build/release-assets.sha256
+          for asset_path in "${checksum_assets[@]}"; do
+            digest="$(sha256sum "${asset_path}" | cut -d' ' -f1)"
+            printf '%s  %s\n' "${digest}" "$(basename "${asset_path}")" \
+              >>build/release-assets.sha256
+          done
 
       - name: Create or repair the exact release tag and GitHub Release
         shell: bash
