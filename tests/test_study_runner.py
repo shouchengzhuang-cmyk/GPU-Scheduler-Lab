@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -83,6 +84,23 @@ def _successful_plan(
     plan: StudyRunPlan,
 ) -> dict[str, float]:
     return {"completion-rate": float(int(plan.run_id[:4], 16) % 100) / 100.0}
+
+
+class _SlowFirstPlan:
+    def __call__(
+        self,
+        _config: StudyConfig,
+        _template: ScenarioTemplate,
+        plan: StudyRunPlan,
+    ) -> dict[str, float]:
+        if (
+            plan.variant_id == "ablation-topology"
+            and plan.policy_id == "binpack"
+            and plan.seed == 3
+            and plan.replication == 0
+        ):
+            time.sleep(0.5)
+        return {"completion-rate": float(int(plan.run_id[:4], 16) % 100) / 100.0}
 
 
 def test_run_plan_is_stable_and_sorted_across_seeds() -> None:
@@ -259,6 +277,35 @@ def test_parallel_warmup_failure_preserves_other_runs_for_resume(tmp_path: Path)
     recovered = run_study(config_path, executor=_successful_plan, workers=2)
     assert recovered.run_count == expected_runs
     assert recovered.resumed_count == expected_runs - 1
+
+
+def test_parallel_results_are_persisted_in_completion_order(tmp_path: Path) -> None:
+    config_path = _equivalent_overlay(tmp_path / "completion-order")
+    artifacts = run_study(config_path, executor=_SlowFirstPlan(), workers=2)
+
+    persisted = [
+        (json.loads(path.read_text(encoding="utf-8")), path.stat().st_mtime_ns)
+        for path in (artifacts.output_directory / "runs").glob("*/result.json")
+    ]
+    slow_mtime = next(
+        mtime
+        for record, mtime in persisted
+        if record["variant_id"] == "ablation-topology"
+        and record["policy_id"] == "binpack"
+        and record["seed"] == 3
+        and record["replication"] == 0
+    )
+    fast_mtimes = [
+        mtime
+        for record, mtime in persisted
+        if not (
+            record["variant_id"] == "ablation-topology"
+            and record["policy_id"] == "binpack"
+            and record["seed"] == 3
+            and record["replication"] == 0
+        )
+    ]
+    assert min(fast_mtimes) < slow_mtime
 
 
 def test_workers_must_be_positive() -> None:

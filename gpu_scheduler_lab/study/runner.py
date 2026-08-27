@@ -8,7 +8,7 @@ import math
 import re
 from collections import defaultdict
 from collections.abc import Callable, Iterable
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, pstdev
@@ -128,15 +128,18 @@ def run_study(
     elif pending:
         worker_count = min(workers, len(pending))
         with ProcessPoolExecutor(max_workers=worker_count) as pool:
-            parallel_outcomes = pool.map(
-                _execute_study_plan,
-                itertools.repeat(config),
-                itertools.repeat(template),
-                pending,
-                itertools.repeat(execute),
-                itertools.repeat(True),
-                chunksize=1,
-            )
+            futures = [
+                pool.submit(
+                    _execute_study_plan,
+                    config,
+                    template,
+                    plan,
+                    execute,
+                    True,
+                )
+                for plan in pending
+            ]
+            parallel_outcomes = (future.result() for future in as_completed(futures))
             completed.extend(
                 _persist_study_outcomes(
                     output,
