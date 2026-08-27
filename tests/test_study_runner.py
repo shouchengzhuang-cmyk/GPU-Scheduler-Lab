@@ -12,6 +12,7 @@ from gpu_scheduler_lab.study import StudyConfig
 from gpu_scheduler_lab.study.report import generate_study_report, verify_hash_manifest
 from gpu_scheduler_lab.study.runner import (
     ScenarioTemplate,
+    StudyRunError,
     StudyRunPlan,
     build_run_plan,
     load_scenario_template,
@@ -39,6 +40,23 @@ class _FlakyOncePerPlan:
         if not self.failed:
             self.failed = True
             raise RuntimeError("injected per-process first-attempt failure")
+        return {"completion-rate": float(int(plan.run_id[:4], 16) % 100) / 100.0}
+
+
+class _FailOnePlan:
+    def __call__(
+        self,
+        _config: StudyConfig,
+        _template: ScenarioTemplate,
+        plan: StudyRunPlan,
+    ) -> dict[str, float]:
+        if (
+            plan.variant_id == "baseline"
+            and plan.policy_id == "binpack"
+            and plan.seed == 3
+            and plan.replication == 0
+        ):
+            raise RuntimeError("injected terminal plan failure")
         return {"completion-rate": float(int(plan.run_id[:4], 16) % 100) / 100.0}
 
 
@@ -156,6 +174,32 @@ def test_parallel_retry_and_resume_keep_per_run_attempts(tmp_path: Path) -> None
     second = run_study(config_path, executor=_FlakyOncePerPlan(), workers=2)
     assert second.run_count == first.run_count
     assert second.resumed_count == first.run_count
+
+
+def test_parallel_failure_persists_other_completed_runs_for_resume(tmp_path: Path) -> None:
+    config_path = _equivalent_overlay(tmp_path / "failure")
+    config = StudyConfig.load(config_path)
+    template = load_scenario_template(config.scenario_path)
+    expected_runs = len(build_run_plan(config, template, "f" * 64))
+
+    with pytest.raises(StudyRunError, match="injected terminal plan failure"):
+        run_study(config_path, executor=_FailOnePlan(), workers=2)
+
+    run_directories = sorted((config.output_directory / "runs").iterdir())
+    manifests = [
+        json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        for directory in run_directories
+    ]
+    assert len(run_directories) == expected_runs
+    assert sum(manifest["status"] == "failed" for manifest in manifests) == 1
+    assert sum(manifest["status"] == "complete" for manifest in manifests) == expected_runs - 1
+    assert sum((directory / "result.json").is_file() for directory in run_directories) == (
+        expected_runs - 1
+    )
+
+    recovered = run_study(config_path, executor=_FlakyOncePerPlan(), workers=2)
+    assert recovered.run_count == expected_runs
+    assert recovered.resumed_count == expected_runs - 1
 
 
 def test_workers_must_be_positive() -> None:

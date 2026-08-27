@@ -135,7 +135,14 @@ def run_study(
                 itertools.repeat(execute),
                 chunksize=1,
             )
-            completed.extend(_persist_study_outcomes(output, revision, parallel_outcomes))
+            completed.extend(
+                _persist_study_outcomes(
+                    output,
+                    revision,
+                    parallel_outcomes,
+                    persist_after_failure=True,
+                )
+            )
 
     completed.sort(key=_record_sort_key)
     summary = aggregate_study_runs(completed)
@@ -248,8 +255,11 @@ def _persist_study_outcomes(
     output: Path,
     revision: str,
     outcomes: Iterable[_StudyRunOutcome],
+    *,
+    persist_after_failure: bool = False,
 ) -> list[dict[str, Any]]:
     completed: list[dict[str, Any]] = []
+    first_failure: StudyRunError | None = None
     for outcome in outcomes:
         plan = outcome.plan
         run_directory = output / "runs" / plan.run_id
@@ -269,10 +279,15 @@ def _persist_study_outcomes(
                     attempts=len(outcome.errors),
                 ),
             )
-            raise StudyRunError(
+            failure = StudyRunError(
                 f"run {plan.run_id} failed after {len(outcome.errors)} attempts: "
                 f"{outcome.errors[-1]}"
             )
+            if not persist_after_failure:
+                raise failure
+            if first_failure is None:
+                first_failure = failure
+            continue
         record = _completed_record(plan, outcome.metrics)
         _write_json(run_directory / "result.json", record)
         _write_json(
@@ -285,6 +300,8 @@ def _persist_study_outcomes(
             ),
         )
         completed.append(record)
+    if first_failure is not None:
+        raise first_failure
     return completed
 
 
