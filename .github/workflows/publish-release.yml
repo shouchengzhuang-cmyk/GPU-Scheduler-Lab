@@ -18,7 +18,7 @@ jobs:
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/publish-release ')
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       actions: read
       contents: read
@@ -664,7 +664,9 @@ jobs:
 
   notify-prepare-failure:
     needs: prepare
-    if: ${{ always() && needs.prepare.result == 'failure' }}
+    if: >-
+      ${{ always() &&
+      (needs.prepare.result == 'failure' || needs.prepare.result == 'cancelled') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -672,10 +674,11 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_VERSION: 0.3.0
+      PREPARE_RESULT: ${{ needs.prepare.result }}
     steps:
-      - name: Record preparation failure
+      - name: Record preparation non-success
         shell: bash
         run: |
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --body "❌ GPU Scheduler Lab v${RELEASE_VERSION} release preparation failed before publication. No tag, GitHub Release, or deployment was attempted. Inspect workflow run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} before retrying the same owner authorization command."
+            --body "❌ GPU Scheduler Lab v${RELEASE_VERSION} release preparation ended with result \`${PREPARE_RESULT}\` before publication. No tag, GitHub Release, or deployment was attempted. Inspect workflow run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} before retrying the same owner authorization command."
