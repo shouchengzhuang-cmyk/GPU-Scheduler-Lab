@@ -567,20 +567,7 @@ jobs:
               isinstance(retained_environment[key], str) and retained_environment[key]
               for key in expected_environment_keys
           )
-          exact_environment_keys = expected_environment_keys - {
-              "python_version",
-              "platform_release",
-          }
-          assert {key: retained_environment[key] for key in exact_environment_keys} == {
-              key: generated_environment[key] for key in exact_environment_keys
-          }
-          retained_python = retained_environment["python_version"]
-          generated_python = generated_environment["python_version"]
-          assert re.fullmatch(r"\d+\.\d+\.\d+", retained_python)
-          assert retained_python.split(".")[:2] == generated_python.split(".")[:2]
-          assert re.fullmatch(
-              r"[A-Za-z0-9._+-]+", retained_environment["platform_release"]
-          )
+          assert retained_environment == generated_environment
           PY
           if [ "${release_is_draft}" = "true" ]; then
             main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
