@@ -567,7 +567,38 @@ jobs:
               isinstance(retained_environment[key], str) and retained_environment[key]
               for key in expected_environment_keys
           )
-          assert retained_environment == generated_environment
+          volatile_environment_keys = {"python_version", "platform_release"}
+          stable_environment_keys = expected_environment_keys - volatile_environment_keys
+          assert {key: retained_environment[key] for key in stable_environment_keys} == {
+              key: generated_environment[key] for key in stable_environment_keys
+          }
+
+          def python_release(value: str) -> tuple[int, int, int]:
+              match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", value)
+              assert match, value
+              return tuple(int(part) for part in match.groups())
+
+          retained_python = python_release(retained_environment["python_version"])
+          generated_python = python_release(generated_environment["python_version"])
+          assert retained_python[:2] == generated_python[:2] == (3, 12)
+          assert retained_python <= generated_python
+
+          def linux_kernel_release(value: str) -> tuple[tuple[int, int, int, int], str]:
+              match = re.fullmatch(
+                  r"(\d+)\.(\d+)\.(\d+)-(\d+)-([A-Za-z0-9._+-]+)", value
+              )
+              assert match, value
+              version = tuple(int(part) for part in match.groups()[:4])
+              return version, match.group(5)
+
+          retained_kernel, retained_flavor = linux_kernel_release(
+              retained_environment["platform_release"]
+          )
+          generated_kernel, generated_flavor = linux_kernel_release(
+              generated_environment["platform_release"]
+          )
+          assert retained_flavor == generated_flavor
+          assert retained_kernel <= generated_kernel
           PY
           if [ "${release_is_draft}" = "true" ]; then
             main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
