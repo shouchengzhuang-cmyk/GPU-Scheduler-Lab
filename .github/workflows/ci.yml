@@ -34,8 +34,11 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          python -m gpu_scheduler_lab study run --config study/study-small.yaml
-          python -m gpu_scheduler_lab study run --config study/study-small.yaml
+          study_workers="$(python -c 'import os; print(max(1, min(4, os.cpu_count() or 1)))')"
+          python -m gpu_scheduler_lab study run \
+            --config study/study-small.yaml --workers "${study_workers}"
+          python -m gpu_scheduler_lab study run \
+            --config study/study-small.yaml --workers "${study_workers}"
           python -m gpu_scheduler_lab study report --input build/study/small
           python -m gpu_scheduler_lab study verify --input build/study/small
       - name: Upload small study report bundle
