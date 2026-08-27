@@ -7,7 +7,8 @@ import json
 import math
 import re
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, pstdev
@@ -86,11 +87,21 @@ class StudyRunError(RuntimeError):
 RunExecutor = Callable[[StudyConfig, ScenarioTemplate, StudyRunPlan], dict[str, float]]
 
 
+@dataclass(frozen=True, slots=True)
+class _StudyRunOutcome:
+    plan: StudyRunPlan
+    metrics: dict[str, float] | None
+    errors: tuple[str, ...]
+
+
 def run_study(
     config_path: Path,
     *,
     executor: RunExecutor | None = None,
+    workers: int = 1,
 ) -> StudyArtifacts:
+    if isinstance(workers, bool) or workers < 1:
+        raise ValueError("workers must be an integer >= 1")
     config = StudyConfig.load(config_path)
     template = load_scenario_template(config.scenario_path)
     revision = git_sha(config.source_path.parent) or "unknown"
@@ -100,6 +111,7 @@ def run_study(
     output.mkdir(parents=True, exist_ok=True)
     execute = executor or simulate_plan
     completed: list[dict[str, Any]] = []
+    pending: list[StudyRunPlan] = []
     resumed_count = 0
     for plan in plans:
         cached = _load_completed_run(output, plan) if config.resume else None
@@ -107,38 +119,23 @@ def run_study(
             completed.append(cached)
             resumed_count += 1
             continue
-        run_directory = output / "runs" / plan.run_id
-        run_directory.mkdir(parents=True, exist_ok=True)
-        for _ in range(config.warmup_runs):
-            execute(config, template, plan)
-        errors: list[str] = []
-        metrics: dict[str, float] | None = None
-        for attempt in range(config.max_retries + 1):
-            try:
-                metrics = execute(config, template, plan)
-                break
-            except Exception as exc:  # noqa: BLE001 - retry boundary records any failed run.
-                error = _safe_error(exc)
-                errors.append(error)
-                _write_json(
-                    run_directory / "attempts" / f"{attempt + 1:02d}.json",
-                    {"attempt": attempt + 1, "error": error},
-                )
-        if metrics is None:
-            _write_json(
-                run_directory / "manifest.json",
-                _run_manifest(plan, revision, status="failed", attempts=len(errors)),
+        pending.append(plan)
+
+    if workers == 1 or len(pending) <= 1:
+        serial_outcomes = (_execute_study_plan(config, template, plan, execute) for plan in pending)
+        completed.extend(_persist_study_outcomes(output, revision, serial_outcomes))
+    elif pending:
+        worker_count = min(workers, len(pending))
+        with ProcessPoolExecutor(max_workers=worker_count) as pool:
+            parallel_outcomes = pool.map(
+                _execute_study_plan,
+                itertools.repeat(config),
+                itertools.repeat(template),
+                pending,
+                itertools.repeat(execute),
+                chunksize=1,
             )
-            raise StudyRunError(
-                f"run {plan.run_id} failed after {len(errors)} attempts: {errors[-1]}"
-            )
-        record = _completed_record(plan, metrics)
-        _write_json(run_directory / "result.json", record)
-        _write_json(
-            run_directory / "manifest.json",
-            _run_manifest(plan, revision, status="complete", attempts=len(errors) + 1),
-        )
-        completed.append(record)
+            completed.extend(_persist_study_outcomes(output, revision, parallel_outcomes))
 
     completed.sort(key=_record_sort_key)
     summary = aggregate_study_runs(completed)
@@ -226,6 +223,69 @@ def run_study(
         run_count=len(completed),
         resumed_count=resumed_count,
     )
+
+
+def _execute_study_plan(
+    config: StudyConfig,
+    template: ScenarioTemplate,
+    plan: StudyRunPlan,
+    execute: RunExecutor,
+) -> _StudyRunOutcome:
+    for _ in range(config.warmup_runs):
+        execute(config, template, plan)
+    errors: list[str] = []
+    metrics: dict[str, float] | None = None
+    for _attempt in range(config.max_retries + 1):
+        try:
+            metrics = execute(config, template, plan)
+            break
+        except Exception as exc:  # noqa: BLE001 - retry boundary records any failed run.
+            errors.append(_safe_error(exc))
+    return _StudyRunOutcome(plan=plan, metrics=metrics, errors=tuple(errors))
+
+
+def _persist_study_outcomes(
+    output: Path,
+    revision: str,
+    outcomes: Iterable[_StudyRunOutcome],
+) -> list[dict[str, Any]]:
+    completed: list[dict[str, Any]] = []
+    for outcome in outcomes:
+        plan = outcome.plan
+        run_directory = output / "runs" / plan.run_id
+        run_directory.mkdir(parents=True, exist_ok=True)
+        for attempt, error in enumerate(outcome.errors, start=1):
+            _write_json(
+                run_directory / "attempts" / f"{attempt:02d}.json",
+                {"attempt": attempt, "error": error},
+            )
+        if outcome.metrics is None:
+            _write_json(
+                run_directory / "manifest.json",
+                _run_manifest(
+                    plan,
+                    revision,
+                    status="failed",
+                    attempts=len(outcome.errors),
+                ),
+            )
+            raise StudyRunError(
+                f"run {plan.run_id} failed after {len(outcome.errors)} attempts: "
+                f"{outcome.errors[-1]}"
+            )
+        record = _completed_record(plan, outcome.metrics)
+        _write_json(run_directory / "result.json", record)
+        _write_json(
+            run_directory / "manifest.json",
+            _run_manifest(
+                plan,
+                revision,
+                status="complete",
+                attempts=len(outcome.errors) + 1,
+            ),
+        )
+        completed.append(record)
+    return completed
 
 
 def load_scenario_template(path: Path) -> ScenarioTemplate:

@@ -125,7 +125,8 @@ jobs:
           ruff check .
           mypy .
           pytest
-          make reproduce-study
+          study_workers="$(python -c 'import os; print(max(1, min(4, os.cpu_count() or 1)))')"
+          make reproduce-study STUDY_WORKERS="${study_workers}"
 
       - name: Verify the canonical study is bound to the release commit
         shell: bash
