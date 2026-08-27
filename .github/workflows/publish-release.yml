@@ -435,17 +435,36 @@ jobs:
 
           retained_environment = json.loads((retained / "environment.json").read_text(encoding="utf-8"))
           generated_environment = json.loads((generated / "environment.json").read_text(encoding="utf-8"))
-          stable_environment_keys = {
+          expected_environment_keys = {
               "schema_version",
+              "python_version",
               "python_implementation",
               "package_version",
               "platform_system",
+              "platform_release",
               "machine",
               "executable_name",
           }
-          assert {key: retained_environment[key] for key in stable_environment_keys} == {
-              key: generated_environment[key] for key in stable_environment_keys
+          assert set(retained_environment) == expected_environment_keys
+          assert set(generated_environment) == expected_environment_keys
+          assert all(
+              isinstance(retained_environment[key], str) and retained_environment[key]
+              for key in expected_environment_keys
+          )
+          exact_environment_keys = expected_environment_keys - {
+              "python_version",
+              "platform_release",
           }
+          assert {key: retained_environment[key] for key in exact_environment_keys} == {
+              key: generated_environment[key] for key in exact_environment_keys
+          }
+          retained_python = retained_environment["python_version"]
+          generated_python = generated_environment["python_version"]
+          assert re.fullmatch(r"\d+\.\d+\.\d+", retained_python)
+          assert retained_python.split(".")[:2] == generated_python.split(".")[:2]
+          assert re.fullmatch(
+              r"[A-Za-z0-9._+-]+", retained_environment["platform_release"]
+          )
           PY
           retained_wheel="$(find "${verification_dir}" -maxdepth 1 -type f \
             -name 'gpu_scheduler_lab-*.whl' -print -quit)"
@@ -463,6 +482,27 @@ jobs:
             main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
             test "${main_sha}" = "${TARGET_SHA}"
             test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+            remote_tag_sha="$(
+              git ls-remote origin "refs/tags/${RELEASE_TAG}^{}" | cut -f1
+            )"
+            if [ -z "${remote_tag_sha}" ]; then
+              remote_tag_sha="$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | cut -f1)"
+            fi
+            test "${remote_tag_sha}" = "${TARGET_SHA}"
+            mapfile -t final_published_assets < <(
+              gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+                --json assets --jq '.assets[].name' | sort
+            )
+            test "$(printf '%s\n' "${final_published_assets[@]}")" = \
+              "$(printf '%s\n' "${expected_assets[@]}")"
+            final_verification_dir="${RUNNER_TEMP}/release-asset-final-verification"
+            mkdir -p "${final_verification_dir}"
+            gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --dir "${final_verification_dir}" --clobber
+            cmp build/release-assets.sha256 \
+              "${final_verification_dir}/release-assets.sha256"
+            (cd "${final_verification_dir}" && \
+              sha256sum --check --strict release-assets.sha256)
             remote_tag_sha="$(
               git ls-remote origin "refs/tags/${RELEASE_TAG}^{}" | cut -f1
             )"
