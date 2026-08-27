@@ -290,7 +290,7 @@ $$
 
 ## Mini-AI-Cloud integration
 
-本项目与 [Mini-AI-Cloud](https://github.com/shouchengzhuang-cmyk/Mini-AI-Cloud) 通过版本化文件契约联合：Worker GPU inventory 和 Task workload export 可转换为本项目 scenario，结果 JSON 可作为离线 policy study 证据。两边没有 Python import、数据库或服务运行时耦合。输入与结果 handoff schema 分别为 [`contracts/mini-ai-cloud-v1.schema.json`](contracts/mini-ai-cloud-v1.schema.json) 和 [`contracts/result-handoff-v1.schema.json`](contracts/result-handoff-v1.schema.json)。
+本项目与 [Mini-AI-Cloud](https://github.com/shouchengzhuang-cmyk/Mini-AI-Cloud) 通过版本化文件契约联合：Worker accelerator inventory 和 Task workload export 可转换为本项目 scenario，结果 JSON 可作为离线 policy study 证据。两边没有 Python import、数据库或服务运行时耦合。输入支持 [`contracts/mini-ai-cloud-v1.schema.json`](contracts/mini-ai-cloud-v1.schema.json) 与 [`contracts/mini-ai-cloud-v2.schema.json`](contracts/mini-ai-cloud-v2.schema.json)，结果使用 [`contracts/result-handoff-v1.schema.json`](contracts/result-handoff-v1.schema.json)。
 
 ```bash
 .venv/bin/python -m gpu_scheduler_lab import-mini-ai-cloud \
