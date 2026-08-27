@@ -335,6 +335,26 @@ jobs:
           assert metadata["Name"] == "gpu-scheduler-lab"
           assert metadata["Version"] == version
 
+          generated_wheels = list(Path("dist").glob("gpu_scheduler_lab-*.whl"))
+          assert len(generated_wheels) == 1, generated_wheels
+
+          def normalized_wheel_hashes(path: Path) -> dict[str, str]:
+              with zipfile.ZipFile(path) as wheel:
+                  result = {}
+                  for name in sorted(wheel.namelist()):
+                      if name.endswith(".dist-info/RECORD"):
+                          continue
+                      payload = wheel.read(name)
+                      if name.endswith(".dist-info/WHEEL"):
+                          lines = [
+                              line for line in payload.splitlines() if not line.startswith(b"Generator:")
+                          ]
+                          payload = b"\n".join(lines) + b"\n"
+                      result[name] = hashlib.sha256(payload).hexdigest()
+                  return result
+
+          assert normalized_wheel_hashes(wheels[0]) == normalized_wheel_hashes(generated_wheels[0])
+
           archive = root / f"gpu-scheduler-lab-v{version}-study.tar.gz"
           checksum_entries = {}
           for line in (root / "release-assets.sha256").read_text(encoding="utf-8").splitlines():
