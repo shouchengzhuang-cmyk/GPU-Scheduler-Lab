@@ -267,7 +267,7 @@ jobs:
             gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
               --title "GPU Scheduler Lab ${RELEASE_TAG}" \
               --notes-file build/final-release-notes.md \
-              --latest
+              --draft
             gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber \
               "${release_assets[@]}"
           else
@@ -277,9 +277,6 @@ jobs:
               --title "GPU Scheduler Lab ${RELEASE_TAG}" \
               --notes-file build/final-release-notes.md \
               "${release_assets[@]}"
-            gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
-              --draft=false \
-              --latest
           fi
 
           mapfile -t published_assets < <(
@@ -289,6 +286,9 @@ jobs:
           mapfile -t expected_assets < <(printf '%s\n' "${expected_assets[@]}" | sort)
           test "$(printf '%s\n' "${published_assets[@]}")" = \
             "$(printf '%s\n' "${expected_assets[@]}")"
+          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --draft=false \
+            --latest
 
       - name: Record successful publication
         if: success()
