@@ -307,15 +307,17 @@ jobs:
           mkdir -p "${verification_dir}"
           gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
             --dir "${verification_dir}" --clobber
-          (cd "${verification_dir}" && sha256sum --check release-assets.sha256)
+          (cd "${verification_dir}" && sha256sum --check --strict release-assets.sha256)
           if [ "${release_is_draft}" = "true" ]; then
             cmp build/release-assets.sha256 "${verification_dir}/release-assets.sha256"
           fi
 
           export VERIFICATION_DIR="${verification_dir}"
           python - <<'PY'
+          import hashlib
           import json
           import os
+          import re
           import tarfile
           import zipfile
           from email.parser import Parser
@@ -334,6 +336,15 @@ jobs:
           assert metadata["Version"] == version
 
           archive = root / f"gpu-scheduler-lab-v{version}-study.tar.gz"
+          checksum_entries = {}
+          for line in (root / "release-assets.sha256").read_text(encoding="utf-8").splitlines():
+              digest, separator, name = line.partition("  ")
+              assert separator and re.fullmatch(r"[0-9a-f]{64}", digest), line
+              assert name and "/" not in name and "\\" not in name, name
+              assert name not in checksum_entries, name
+              checksum_entries[name] = digest
+          assert set(checksum_entries) == {wheels[0].name, archive.name}, checksum_entries
+
           extract_root = root / "retained-study"
           with tarfile.open(archive, "r:gz") as bundle:
               members = bundle.getmembers()
@@ -347,7 +358,42 @@ jobs:
 
           assert manifest["git_sha"] == sha
           assert manifest["dirty_tree"] is False
+
+          def reproducible_hashes(base: Path) -> dict[str, str]:
+              excluded = {"environment.json", "hashes.sha256"}
+              return {
+                  path.relative_to(base).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                  for path in sorted(base.rglob("*"))
+                  if path.is_file() and path.name not in excluded
+              }
+
+          generated = Path("build/study/canonical")
+          retained = extract_root / "canonical"
+          assert reproducible_hashes(retained) == reproducible_hashes(generated)
+
+          retained_environment = json.loads((retained / "environment.json").read_text(encoding="utf-8"))
+          generated_environment = json.loads((generated / "environment.json").read_text(encoding="utf-8"))
+          stable_environment_keys = {
+              "schema_version",
+              "python_implementation",
+              "package_version",
+              "platform_system",
+              "machine",
+              "executable_name",
+          }
+          assert {key: retained_environment[key] for key in stable_environment_keys} == {
+              key: generated_environment[key] for key in stable_environment_keys
+          }
           PY
+          retained_wheel="$(find "${verification_dir}" -maxdepth 1 -type f \
+            -name 'gpu_scheduler_lab-*.whl' -print -quit)"
+          test -n "${retained_wheel}"
+          python -m venv "${verification_dir}/retained-wheel-venv"
+          "${verification_dir}/retained-wheel-venv/bin/python" -m pip install "${retained_wheel}"
+          "${verification_dir}/retained-wheel-venv/bin/gpu-scheduler-lab" --help >/dev/null
+          test "$("${verification_dir}/retained-wheel-venv/bin/python" -c \
+            'import importlib.metadata; print(importlib.metadata.version("gpu-scheduler-lab"))')" = \
+            "${RELEASE_VERSION}"
           python -m gpu_scheduler_lab study verify \
             --input "${verification_dir}/retained-study/canonical"
 
