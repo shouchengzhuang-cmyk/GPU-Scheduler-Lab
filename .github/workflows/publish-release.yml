@@ -460,6 +460,16 @@ jobs:
             --input "${verification_dir}/retained-study/canonical"
 
           if [ "${release_is_draft}" = "true" ]; then
+            main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+            test "${main_sha}" = "${TARGET_SHA}"
+            test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+            remote_tag_sha="$(
+              git ls-remote origin "refs/tags/${RELEASE_TAG}^{}" | cut -f1
+            )"
+            if [ -z "${remote_tag_sha}" ]; then
+              remote_tag_sha="$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | cut -f1)"
+            fi
+            test "${remote_tag_sha}" = "${TARGET_SHA}"
             gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
               --draft=false \
               --prerelease=false \
@@ -471,6 +481,8 @@ jobs:
             --json isPrerelease --jq '.isPrerelease')" = "false"
           test "$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
             --json name --jq '.name')" = "GPU Scheduler Lab ${RELEASE_TAG}"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')" = \
+            "${RELEASE_TAG}"
           test "$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
             --json body --jq '.body')" = "$(cat build/final-release-notes.md)"
 
