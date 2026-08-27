@@ -649,3 +649,21 @@ jobs:
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${GITHUB_REPOSITORY}" \
             --body "❌ GPU Scheduler Lab v${RELEASE_VERSION} publication failed. No deployment was attempted. Inspect workflow run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} before retrying the same owner authorization command."
+
+  notify-prepare-failure:
+    needs: prepare
+    if: ${{ always() && needs.prepare.result == 'failure' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: 0.3.0
+    steps:
+      - name: Record preparation failure
+        shell: bash
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --body "❌ GPU Scheduler Lab v${RELEASE_VERSION} release preparation failed before publication. No tag, GitHub Release, or deployment was attempted. Inspect workflow run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} before retrying the same owner authorization command."
