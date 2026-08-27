@@ -174,6 +174,28 @@ jobs:
           test -f build/study/canonical/hashes.sha256
           test -n "$(find dist -maxdepth 1 -name 'gpu_scheduler_lab-*.whl' -print -quit)"
 
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          from gpu_scheduler_lab.study.report import verify_hash_manifest, write_hash_manifest
+
+          root = Path("build/study/canonical")
+          environment_path = root / "environment.json"
+          environment = json.loads(environment_path.read_text(encoding="utf-8"))
+          environment.pop("python_version")
+          environment.pop("platform_release")
+          environment["volatile_fields_omitted"] = "python_version,platform_release"
+          environment_path.write_text(
+              json.dumps(environment, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+              newline="\n",
+          )
+          write_hash_manifest(root, root / "hashes.sha256")
+          verify_hash_manifest(root, root / "hashes.sha256")
+          PY
+          python -m gpu_scheduler_lab study verify --input build/study/canonical
+
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
             -czf "build/gpu-scheduler-lab-v${RELEASE_VERSION}-study.tar.gz" \
             -C build/study canonical
@@ -200,6 +222,7 @@ jobs:
               ## Evidence boundary
 
               - Evidence kind: **SIMULATED**.
+              - Exact Python patch and hosted-runner kernel values are intentionally omitted from the asserted study environment because they are volatile across immutable-release retries.
               - Real NVIDIA GPU / CUDA / NCCL execution: **NOT RUN**.
               - Kubernetes or production scheduler validation: **NOT RUN**.
               - Full public production trace study (B7): **NOT RUN**; bundled fixtures and documented adapters are retained.
@@ -553,13 +576,12 @@ jobs:
           generated_environment = json.loads((generated / "environment.json").read_text(encoding="utf-8"))
           expected_environment_keys = {
               "schema_version",
-              "python_version",
               "python_implementation",
               "package_version",
               "platform_system",
-              "platform_release",
               "machine",
               "executable_name",
+              "volatile_fields_omitted",
           }
           assert set(retained_environment) == expected_environment_keys
           assert set(generated_environment) == expected_environment_keys
@@ -567,38 +589,10 @@ jobs:
               isinstance(retained_environment[key], str) and retained_environment[key]
               for key in expected_environment_keys
           )
-          volatile_environment_keys = {"python_version", "platform_release"}
-          stable_environment_keys = expected_environment_keys - volatile_environment_keys
-          assert {key: retained_environment[key] for key in stable_environment_keys} == {
-              key: generated_environment[key] for key in stable_environment_keys
-          }
-
-          def python_release(value: str) -> tuple[int, int, int]:
-              match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", value)
-              assert match, value
-              return tuple(int(part) for part in match.groups())
-
-          retained_python = python_release(retained_environment["python_version"])
-          generated_python = python_release(generated_environment["python_version"])
-          assert retained_python[:2] == generated_python[:2] == (3, 12)
-          assert retained_python <= generated_python
-
-          def linux_kernel_release(value: str) -> tuple[tuple[int, int, int, int], str]:
-              match = re.fullmatch(
-                  r"(\d+)\.(\d+)\.(\d+)-(\d+)-([A-Za-z0-9._+-]+)", value
-              )
-              assert match, value
-              version = tuple(int(part) for part in match.groups()[:4])
-              return version, match.group(5)
-
-          retained_kernel, retained_flavor = linux_kernel_release(
-              retained_environment["platform_release"]
+          assert retained_environment == generated_environment
+          assert retained_environment["volatile_fields_omitted"] == (
+              "python_version,platform_release"
           )
-          generated_kernel, generated_flavor = linux_kernel_release(
-              generated_environment["platform_release"]
-          )
-          assert retained_flavor == generated_flavor
-          assert retained_kernel <= generated_kernel
           PY
           if [ "${release_is_draft}" = "true" ]; then
             main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
