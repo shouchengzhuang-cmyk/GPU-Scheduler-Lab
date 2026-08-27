@@ -77,6 +77,14 @@ class _FailOneWarmup:
         return {"completion-rate": float(int(plan.run_id[:4], 16) % 100) / 100.0}
 
 
+def _successful_plan(
+    _config: StudyConfig,
+    _template: ScenarioTemplate,
+    plan: StudyRunPlan,
+) -> dict[str, float]:
+    return {"completion-rate": float(int(plan.run_id[:4], 16) % 100) / 100.0}
+
+
 def test_run_plan_is_stable_and_sorted_across_seeds() -> None:
     config = StudyConfig.load(SMALL_CONFIG)
     template = load_scenario_template(config.scenario_path)
@@ -248,14 +256,7 @@ def test_parallel_warmup_failure_preserves_other_runs_for_resume(tmp_path: Path)
         json.loads((failed_directory / "attempts" / "warmup.json").read_text())["phase"] == "warmup"
     )
 
-    def succeed(
-        _config: StudyConfig,
-        _template: ScenarioTemplate,
-        plan: StudyRunPlan,
-    ) -> dict[str, float]:
-        return {"completion-rate": float(int(plan.run_id[:4], 16) % 100) / 100.0}
-
-    recovered = run_study(config_path, executor=succeed, workers=2)
+    recovered = run_study(config_path, executor=_successful_plan, workers=2)
     assert recovered.run_count == expected_runs
     assert recovered.resumed_count == expected_runs - 1
 
