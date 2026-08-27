@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from gpu_scheduler_lab.experiments import run_experiment
+from gpu_scheduler_lab.heterogeneous import run_heterogeneous_study
 from gpu_scheduler_lab.integrations.mini_ai_cloud import (
     RESULT_CONTRACT_VERSION,
     import_mini_ai_cloud_export,
@@ -35,6 +36,8 @@ SCHEDULERS = (
     "fairshare-no-borrow",
     "fairshare-borrow",
     "fairshare-reclaim",
+    "prefer-nvidia",
+    "prefer-ascend",
 )
 
 
@@ -234,6 +237,11 @@ def _experiment(args: argparse.Namespace) -> None:
     )
 
 
+def _heterogeneous_study(args: argparse.Namespace) -> None:
+    artifacts = run_heterogeneous_study(args.config)
+    print(f"Manifest: {artifacts.manifest}\nRuns: {artifacts.runs}\nReport: {artifacts.report}")
+
+
 def _study_validate(args: argparse.Namespace) -> None:
     config = StudyConfig.load(args.config)
     if args.policy is not None:
@@ -360,6 +368,13 @@ def build_parser() -> argparse.ArgumentParser:
     experiment = subparsers.add_parser("experiment", help="run a reproducible experiment")
     experiment.add_argument("--config", type=Path, required=True)
     experiment.set_defaults(handler=_experiment)
+
+    heterogeneous = subparsers.add_parser(
+        "heterogeneous-study",
+        help="run NVIDIA and Huawei Ascend correctness or calibrated studies",
+    )
+    heterogeneous.add_argument("--config", type=Path, required=True)
+    heterogeneous.set_defaults(handler=_heterogeneous_study)
 
     study = subparsers.add_parser("study", help="validate or run the canonical study")
     study_commands = study.add_subparsers(dest="study_command", required=True)

@@ -10,6 +10,7 @@ from gpu_scheduler_lab.models.accelerator import (
     AcceleratorKind,
     AcceleratorSelectionPolicy,
     AcceleratorVendor,
+    vendor_supports_kind,
 )
 from gpu_scheduler_lab.models.topology import TopologyMode
 
@@ -151,6 +152,16 @@ class Job:
                 raise ValueError(f"{name} must not contain empty values")
             if len(set(values)) != len(values):
                 raise ValueError(f"{name} must not contain duplicates")
+        if (
+            self.allowed_vendors
+            and self.allowed_kinds
+            and not any(
+                vendor_supports_kind(vendor, kind)
+                for vendor in self.allowed_vendors
+                for kind in self.allowed_kinds
+            )
+        ):
+            raise ValueError("allowed_vendors and allowed_kinds must include a supported pair")
         if self.runtime_profile == "":
             raise ValueError("runtime_profile must not be empty")
         if self.checkpoint_cost < 0 or self.restart_cost < 0:

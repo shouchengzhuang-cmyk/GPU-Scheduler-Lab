@@ -110,6 +110,19 @@ uv pip install --python .venv/bin/python -e '.[dev]'
 
 每次输出 `manifest.json`、`runs.json`、`summary.csv`、`summary.json` 和 `comparison.png`；manifest 保存 Git SHA、Python 版本、scenario SHA256、trace 版本、scheduler、seed 和 metrics。
 
+## Heterogeneous NVIDIA and Huawei Ascend study
+
+类型化双栈研究继续复用同一个 simulator，设备与作业显式携带 vendor、kind、model、capability 和 runtime profile。所有多设备 gang 必须落在同一厂商；`prefer-nvidia` / `prefer-ascend` 只改变可行设备之间的确定性优先顺序，并在首选厂商不可用时对另一个显式兼容厂商做有界回退。
+
+```bash
+.venv/bin/python -m gpu_scheduler_lab heterogeneous-study \
+  --config experiments/heterogeneous-correctness.yaml
+.venv/bin/python -m gpu_scheduler_lab heterogeneous-study \
+  --config experiments/heterogeneous-calibrated-synthetic.yaml
+```
+
+correctness mode 只比较可用性、显存、拓扑、quota、fair share、reclaim、碎片、容量损失和 vendor restriction。calibrated mode 要求每个 performance profile 显式标记 `MEASURED|ASSUMED|SYNTHETIC`；未全部达到 `MEASURED` 时禁止输出厂商性能排名。报告固定分开 facts、assumptions 和 synthetic variables。完整合同与证据边界见 [heterogeneous study guide](docs/heterogeneous-study.md)。
+
 ## Canonical study contract
 
 正式研究问题、四类策略、指标、实验变量和 hypotheses 固定在

@@ -10,9 +10,9 @@ class SpreadScheduler(Scheduler):
     name = "spread"
 
     @staticmethod
-    def _eligible(node: Node, job: Job) -> list[GPU]:
+    def _eligible(node: Node, job: Job, eligible_ids: set[str]) -> list[GPU]:
         return sorted(
-            (gpu for gpu in node.gpus if gpu.can_host(job)),
+            (gpu for gpu in node.gpus if gpu.id in eligible_ids),
             key=lambda gpu: (gpu.memory_capacity_gb - job.gpu_memory_gb, gpu.id),
         )
 
@@ -26,7 +26,8 @@ class SpreadScheduler(Scheduler):
             return TopologyAwareScheduler().place(cluster, job)
         nodes = list(cluster.schedulable_nodes)
         nodes.sort(key=lambda node: (node.occupied_gpu_count, node.id))
-        available = {node.id: self._eligible(node, job) for node in nodes}
+        eligible_ids = {gpu.id for gpu in cluster.eligible_gpus(job)}
+        available = {node.id: self._eligible(node, job, eligible_ids) for node in nodes}
         if sum(len(gpus) for gpus in available.values()) < job.requested_gpu_count:
             return None
 

@@ -1,0 +1,10 @@
+study:
+  name: heterogeneous-correctness
+  mode: correctness
+scenario: scenarios/heterogeneous-dual-stack.yaml
+v2_contract_fixture: tests/fixtures/mini_ai_cloud/v2-golden.json
+route_policies: [prefer-nvidia, prefer-ascend]
+outage_vendors: [nvidia, huawei-ascend]
+performance_profiles: []
+output:
+  directory: experiment-results/heterogeneous-correctness
