@@ -69,11 +69,16 @@ jobs:
           TARGET_SHA: ${{ steps.approval.outputs.target_sha }}
         run: |
           set -Eeuo pipefail
-          count="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs" \
-            -f head_sha="${TARGET_SHA}" -f per_page=100 \
-            --jq '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")] | length')"
+          count="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+            -f head_sha="${TARGET_SHA}" \
+            -f branch=main \
+            -f event=push \
+            -f status=success \
+            -f per_page=100 \
+            --jq '.total_count')"
           test "${count}" -ge 1 || {
-            echo "No successful CI run found for ${TARGET_SHA}" >&2
+            echo "No successful main push run for ci.yml at ${TARGET_SHA}" >&2
             exit 1
           }
 
@@ -175,25 +180,25 @@ jobs:
           sha = os.environ["TARGET_SHA"]
           notes = f"""# GPU Scheduler Lab v{os.environ['RELEASE_VERSION']}
 
-This release publishes a deterministic, reproducible **discrete-event simulation study** from exact default-branch commit `{sha}`.
+          This release publishes a deterministic, reproducible **discrete-event simulation study** from exact default-branch commit `{sha}`.
 
-## Included
+          ## Included
 
-- Python wheel and isolated CLI installation smoke evidence.
-- Canonical study manifest, summaries, report, figures and hash list.
-- Heterogeneous/topology-aware placement, fair-share, reclaim, elastic gang and revocable-fleet simulation capabilities.
-- Mini AI Cloud v1 offline file-contract compatibility.
+          - Python wheel and isolated CLI installation smoke evidence.
+          - Canonical study manifest, summaries, report, figures and hash list.
+          - Heterogeneous/topology-aware placement, fair-share, reclaim, elastic gang and revocable-fleet simulation capabilities.
+          - Mini AI Cloud v1 offline file-contract compatibility.
 
-## Evidence boundary
+          ## Evidence boundary
 
-- Evidence kind: **SIMULATED**.
-- Real NVIDIA GPU / CUDA / NCCL execution: **NOT RUN**.
-- Kubernetes or production scheduler validation: **NOT RUN**.
-- Full public production trace study (B7): **NOT RUN**; bundled fixtures and documented adapters are retained.
-- Deployment: **NOT DEPLOYED**.
+          - Evidence kind: **SIMULATED**.
+          - Real NVIDIA GPU / CUDA / NCCL execution: **NOT RUN**.
+          - Kubernetes or production scheduler validation: **NOT RUN**.
+          - Full public production trace study (B7): **NOT RUN**; bundled fixtures and documented adapters are retained.
+          - Deployment: **NOT DEPLOYED**.
 
-The wall-clock benchmark measures this Python simulator only and must not be interpreted as production control-plane throughput.
-"""
+          The wall-clock benchmark measures this Python simulator only and must not be interpreted as production control-plane throughput.
+          """
           Path("build/final-release-notes.md").write_text(notes, encoding="utf-8", newline="\n")
           PY
 
@@ -213,6 +218,10 @@ The wall-clock benchmark measures this Python simulator only and must not be int
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch --force --tags origin
 
+          main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test "${main_sha}" = "${TARGET_SHA}"
+          test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+
           if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
             test "$(git rev-list -n1 "${RELEASE_TAG}")" = "${TARGET_SHA}"
           else
@@ -220,23 +229,56 @@ The wall-clock benchmark measures this Python simulator only and must not be int
             git push origin "refs/tags/${RELEASE_TAG}"
           fi
 
+          mapfile -t wheel_assets < <(
+            find dist -maxdepth 1 -type f -name 'gpu_scheduler_lab-*.whl' -print | sort
+          )
+          test "${#wheel_assets[@]}" -eq 1
+          release_assets=(
+            "${wheel_assets[0]}"
+            "build/gpu-scheduler-lab-v${RELEASE_VERSION}-study.tar.gz"
+            "build/release-assets.sha256"
+          )
+          expected_assets=()
+          for asset_path in "${release_assets[@]}"; do
+            test -f "${asset_path}"
+            expected_assets+=("$(basename "${asset_path}")")
+          done
+
           if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            while IFS= read -r remote_asset; do
+              printf '%s\n' "${expected_assets[@]}" | grep -Fxq "${remote_asset}" || {
+                echo "Unexpected existing release asset: ${remote_asset}" >&2
+                exit 1
+              }
+            done < <(
+              gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+                --json assets --jq '.assets[].name'
+            )
             gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
               --title "GPU Scheduler Lab ${RELEASE_TAG}" \
               --notes-file build/final-release-notes.md \
               --latest
+            gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber \
+              "${release_assets[@]}"
           else
             gh release create "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
               --verify-tag \
+              --draft \
               --title "GPU Scheduler Lab ${RELEASE_TAG}" \
               --notes-file build/final-release-notes.md \
+              "${release_assets[@]}"
+            gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --draft=false \
               --latest
           fi
 
-          gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber \
-            dist/gpu_scheduler_lab-*.whl \
-            "build/gpu-scheduler-lab-v${RELEASE_VERSION}-study.tar.gz" \
-            build/release-assets.sha256
+          mapfile -t published_assets < <(
+            gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --json assets --jq '.assets[].name' | sort
+          )
+          mapfile -t expected_assets < <(printf '%s\n' "${expected_assets[@]}" | sort)
+          test "$(printf '%s\n' "${published_assets[@]}")" = \
+            "$(printf '%s\n' "${expected_assets[@]}")"
 
       - name: Record successful publication
         if: success()
