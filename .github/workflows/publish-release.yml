@@ -306,8 +306,49 @@ jobs:
           mkdir -p "${verification_dir}"
           gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
             --dir "${verification_dir}" --clobber
-          cmp build/release-assets.sha256 "${verification_dir}/release-assets.sha256"
           (cd "${verification_dir}" && sha256sum --check release-assets.sha256)
+          if [ "${release_is_draft}" = "true" ]; then
+            cmp build/release-assets.sha256 "${verification_dir}/release-assets.sha256"
+          fi
+
+          export VERIFICATION_DIR="${verification_dir}"
+          python - <<'PY'
+          import json
+          import os
+          import tarfile
+          import zipfile
+          from email.parser import Parser
+          from pathlib import Path, PurePosixPath
+
+          root = Path(os.environ["VERIFICATION_DIR"])
+          sha = os.environ["TARGET_SHA"]
+          version = os.environ["RELEASE_VERSION"]
+
+          wheels = list(root.glob("gpu_scheduler_lab-*.whl"))
+          assert len(wheels) == 1, wheels
+          with zipfile.ZipFile(wheels[0]) as wheel:
+              metadata_name = next(name for name in wheel.namelist() if name.endswith(".dist-info/METADATA"))
+              metadata = Parser().parsestr(wheel.read(metadata_name).decode("utf-8"))
+          assert metadata["Name"] == "gpu-scheduler-lab"
+          assert metadata["Version"] == version
+
+          archive = root / f"gpu-scheduler-lab-v{version}-study.tar.gz"
+          extract_root = root / "retained-study"
+          with tarfile.open(archive, "r:gz") as bundle:
+              members = bundle.getmembers()
+              for member in members:
+                  path = PurePosixPath(member.name)
+                  assert not path.is_absolute() and ".." not in path.parts
+              manifest_file = bundle.extractfile("canonical/manifest.json")
+              assert manifest_file is not None
+              manifest = json.loads(manifest_file.read().decode("utf-8"))
+              bundle.extractall(extract_root, filter="data")
+
+          assert manifest["git_sha"] == sha
+          assert manifest["dirty_tree"] is False
+          PY
+          python -m gpu_scheduler_lab study verify \
+            --input "${verification_dir}/retained-study/canonical"
 
           if [ "${release_is_draft}" = "true" ]; then
             gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
