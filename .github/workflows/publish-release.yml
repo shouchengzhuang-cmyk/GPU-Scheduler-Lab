@@ -4,17 +4,14 @@ on:
   issue_comment:
     types: [created]
 
-permissions:
-  actions: read
-  contents: write
-  issues: write
+permissions: {}
 
 concurrency:
   group: publish-gpu-scheduler-lab-release
   cancel-in-progress: false
 
 jobs:
-  publish:
+  prepare:
     if: >-
       github.event.issue.pull_request == null &&
       github.event.comment.author_association == 'OWNER' &&
@@ -22,9 +19,14 @@ jobs:
       startsWith(github.event.comment.body, '/publish-release ')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      target_sha: ${{ steps.approval.outputs.target_sha }}
+      tag: ${{ steps.approval.outputs.tag }}
     env:
       RELEASE_VERSION: 0.3.0
-      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Parse explicit owner authorization
         id: approval
@@ -42,18 +44,12 @@ jobs:
           echo "target_sha=${target_sha}" >>"${GITHUB_OUTPUT}"
           echo "tag=v${version}" >>"${GITHUB_OUTPUT}"
 
-      - name: Record publication start
-        shell: bash
-        run: |
-          gh issue comment "${{ github.event.issue.number }}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --body "Release publication started for GPU Scheduler Lab v${RELEASE_VERSION} at commit \`${{ steps.approval.outputs.target_sha }}\`. This publishes simulated-study artifacts only and performs no deployment."
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ steps.approval.outputs.target_sha }}
           fetch-depth: 0
           fetch-tags: true
+          persist-credentials: false
 
       - name: Verify release target is the current default-branch head
         shell: bash
@@ -68,6 +64,7 @@ jobs:
       - name: Require successful CI for the exact SHA
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ steps.approval.outputs.target_sha }}
         run: |
           set -Eeuo pipefail
@@ -87,10 +84,17 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
-          cache: pip
+
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v7
+        with:
+          enable-cache: true
 
       - name: Install release dependencies
-        run: python -m pip install -e '.[dev]'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          uv sync --frozen --extra dev
+          echo "${GITHUB_WORKSPACE}/.venv/bin" >>"${GITHUB_PATH}"
 
       - name: Validate immutable Action pins and release identity
         shell: bash
@@ -222,15 +226,86 @@ jobs:
               >>build/release-assets.sha256
           done
 
+      - name: Stage verified release inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          transfer_dir=build/release-transfer
+          rm -rf "${transfer_dir}"
+          mkdir -p "${transfer_dir}/dist" "${transfer_dir}/build/study"
+          cp dist/*.whl "${transfer_dir}/dist/"
+          cp build/gpu-scheduler-lab-v0.3.0-study.tar.gz \
+            build/release-assets.sha256 \
+            build/final-release-notes.md \
+            "${transfer_dir}/build/"
+          cp -a build/study/canonical "${transfer_dir}/build/study/"
+
+      - name: Upload verified release inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gpu-release-${{ steps.approval.outputs.target_sha }}
+          if-no-files-found: error
+          retention-days: 1
+          path: build/release-transfer/
+
+  publish:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+    env:
+      RELEASE_VERSION: 0.3.0
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Record publication start
+        shell: bash
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --body "Release publication started for GPU Scheduler Lab v${RELEASE_VERSION} at commit \`${{ needs.prepare.outputs.target_sha }}\`. This publishes simulated-study artifacts only and performs no deployment."
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.prepare.outputs.target_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Download verified release inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: gpu-release-${{ needs.prepare.outputs.target_sha }}
+          path: .
+
+      - name: Verify transferred release inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t wheel_assets < <(
+            find dist -maxdepth 1 -type f -name 'gpu_scheduler_lab-*.whl' -print | sort
+          )
+          test "${#wheel_assets[@]}" -eq 1
+          study_asset="build/gpu-scheduler-lab-v${RELEASE_VERSION}-study.tar.gz"
+          test -f "${study_asset}"
+          test -f build/release-assets.sha256
+          test -f build/final-release-notes.md
+          expected_wheel="$({ grep -F "  $(basename "${wheel_assets[0]}")" \
+            build/release-assets.sha256 || true; } | cut -d' ' -f1)"
+          expected_study="$({ grep -F "  $(basename "${study_asset}")" \
+            build/release-assets.sha256 || true; } | cut -d' ' -f1)"
+          test "${expected_wheel}" = "$(sha256sum "${wheel_assets[0]}" | cut -d' ' -f1)"
+          test "${expected_study}" = "$(sha256sum "${study_asset}" | cut -d' ' -f1)"
+
       - name: Create or repair the exact release tag and GitHub Release
         shell: bash
         env:
-          TARGET_SHA: ${{ steps.approval.outputs.target_sha }}
-          RELEASE_TAG: ${{ steps.approval.outputs.tag }}
+          TARGET_SHA: ${{ needs.prepare.outputs.target_sha }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -Eeuo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch --force --tags origin
 
           main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
@@ -240,8 +315,18 @@ jobs:
           if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
             test "$(git rev-list -n1 "${RELEASE_TAG}")" = "${TARGET_SHA}"
           else
-            git tag -a "${RELEASE_TAG}" "${TARGET_SHA}" -m "GPU Scheduler Lab ${RELEASE_TAG}"
-            git push origin "refs/tags/${RELEASE_TAG}"
+            tag_object_sha="$(gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/git/tags" \
+              -f tag="${RELEASE_TAG}" \
+              -f message="GPU Scheduler Lab ${RELEASE_TAG}" \
+              -f object="${TARGET_SHA}" \
+              -f type=commit \
+              --jq '.sha')"
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${RELEASE_TAG}" \
+              -f sha="${tag_object_sha}" >/dev/null
+            git fetch --force --tags origin
+            test "$(git rev-list -n1 "${RELEASE_TAG}")" = "${TARGET_SHA}"
           fi
 
           mapfile -t wheel_assets < <(
@@ -412,6 +497,7 @@ jobs:
               for member in members:
                   path = PurePosixPath(member.name)
                   assert not path.is_absolute() and ".." not in path.parts
+                  assert member.isfile() or member.isdir(), member.name
               manifest_file = bundle.extractfile("canonical/manifest.json")
               assert manifest_file is not None
               manifest = json.loads(manifest_file.read().decode("utf-8"))
@@ -434,6 +520,24 @@ jobs:
 
           generated = Path("build/study/canonical")
           retained = extract_root / "canonical"
+          retained_hashes = {}
+          for line in (retained / "hashes.sha256").read_text(encoding="utf-8").splitlines():
+              digest, separator, relative = line.partition("  ")
+              path = PurePosixPath(relative)
+              assert separator and re.fullmatch(r"[0-9a-f]{64}", digest), line
+              assert relative and not path.is_absolute() and ".." not in path.parts
+              assert "\\" not in relative and relative not in retained_hashes, relative
+              retained_hashes[relative] = digest
+          retained_files = {
+              path.relative_to(retained).as_posix()
+              for path in retained.rglob("*")
+              if path.is_file() and path != retained / "hashes.sha256"
+          }
+          assert set(retained_hashes) == retained_files
+          for relative, digest in retained_hashes.items():
+              path = retained / relative
+              assert not path.is_symlink()
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
           assert reproducible_hashes(retained) == reproducible_hashes(generated)
 
           retained_environment = json.loads((retained / "environment.json").read_text(encoding="utf-8"))
@@ -469,18 +573,6 @@ jobs:
               r"[A-Za-z0-9._+-]+", retained_environment["platform_release"]
           )
           PY
-          retained_wheel="$(find "${verification_dir}" -maxdepth 1 -type f \
-            -name 'gpu_scheduler_lab-*.whl' -print -quit)"
-          test -n "${retained_wheel}"
-          python -m venv "${verification_dir}/retained-wheel-venv"
-          "${verification_dir}/retained-wheel-venv/bin/python" -m pip install "${retained_wheel}"
-          "${verification_dir}/retained-wheel-venv/bin/gpu-scheduler-lab" --help >/dev/null
-          test "$("${verification_dir}/retained-wheel-venv/bin/python" -c \
-            'import importlib.metadata; print(importlib.metadata.version("gpu-scheduler-lab"))')" = \
-            "${RELEASE_VERSION}"
-          python -m gpu_scheduler_lab study verify \
-            --input "${verification_dir}/retained-study/canonical"
-
           if [ "${release_is_draft}" = "true" ]; then
             main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
             test "${main_sha}" = "${TARGET_SHA}"
@@ -535,7 +627,7 @@ jobs:
         run: |
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --body "✅ Published GPU Scheduler Lab v${RELEASE_VERSION} from \`${{ steps.approval.outputs.target_sha }}\` with wheel and deterministic canonical-study bundle. Evidence remains **SIMULATED**; real GPU/Kubernetes/full-public-trace evidence remains **NOT RUN**."
+            --body "✅ Published GPU Scheduler Lab v${RELEASE_VERSION} from \`${{ needs.prepare.outputs.target_sha }}\` with wheel and deterministic canonical-study bundle. Evidence remains **SIMULATED**; real GPU/Kubernetes/full-public-trace evidence remains **NOT RUN**."
 
       - name: Record publication failure
         if: failure()
