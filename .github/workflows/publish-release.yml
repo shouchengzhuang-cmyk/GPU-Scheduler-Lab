@@ -606,6 +606,8 @@ jobs:
             fi
             test "${remote_tag_sha}" = "${TARGET_SHA}"
             gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --title "GPU Scheduler Lab ${RELEASE_TAG}" \
+              --notes-file build/final-release-notes.md \
               --draft=false \
               --prerelease=false \
               --latest
