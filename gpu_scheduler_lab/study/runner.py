@@ -92,6 +92,7 @@ class _StudyRunOutcome:
     plan: StudyRunPlan
     metrics: dict[str, float] | None
     errors: tuple[str, ...]
+    warmup_error: str | None = None
 
 
 def run_study(
@@ -133,6 +134,7 @@ def run_study(
                 itertools.repeat(template),
                 pending,
                 itertools.repeat(execute),
+                itertools.repeat(True),
                 chunksize=1,
             )
             completed.extend(
@@ -237,9 +239,20 @@ def _execute_study_plan(
     template: ScenarioTemplate,
     plan: StudyRunPlan,
     execute: RunExecutor,
+    capture_warmup_error: bool = False,
 ) -> _StudyRunOutcome:
-    for _ in range(config.warmup_runs):
-        execute(config, template, plan)
+    try:
+        for _ in range(config.warmup_runs):
+            execute(config, template, plan)
+    except Exception as exc:  # noqa: BLE001 - process boundary must return the failure.
+        if not capture_warmup_error:
+            raise
+        return _StudyRunOutcome(
+            plan=plan,
+            metrics=None,
+            errors=(),
+            warmup_error=_safe_error(exc),
+        )
     errors: list[str] = []
     metrics: dict[str, float] | None = None
     for _attempt in range(config.max_retries + 1):
@@ -264,6 +277,11 @@ def _persist_study_outcomes(
         plan = outcome.plan
         run_directory = output / "runs" / plan.run_id
         run_directory.mkdir(parents=True, exist_ok=True)
+        if outcome.warmup_error is not None:
+            _write_json(
+                run_directory / "attempts" / "warmup.json",
+                {"phase": "warmup", "error": outcome.warmup_error},
+            )
         for attempt, error in enumerate(outcome.errors, start=1):
             _write_json(
                 run_directory / "attempts" / f"{attempt:02d}.json",
@@ -276,13 +294,18 @@ def _persist_study_outcomes(
                     plan,
                     revision,
                     status="failed",
-                    attempts=len(outcome.errors),
+                    attempts=0 if outcome.warmup_error is not None else len(outcome.errors),
                 ),
             )
-            failure = StudyRunError(
-                f"run {plan.run_id} failed after {len(outcome.errors)} attempts: "
-                f"{outcome.errors[-1]}"
-            )
+            if outcome.warmup_error is not None:
+                failure = StudyRunError(
+                    f"run {plan.run_id} failed during warm-up: {outcome.warmup_error}"
+                )
+            else:
+                failure = StudyRunError(
+                    f"run {plan.run_id} failed after {len(outcome.errors)} attempts: "
+                    f"{outcome.errors[-1]}"
+                )
             if not persist_after_failure:
                 raise failure
             if first_failure is None:

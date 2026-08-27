@@ -60,6 +60,23 @@ class _FailOnePlan:
         return {"completion-rate": float(int(plan.run_id[:4], 16) % 100) / 100.0}
 
 
+class _FailOneWarmup:
+    def __call__(
+        self,
+        _config: StudyConfig,
+        _template: ScenarioTemplate,
+        plan: StudyRunPlan,
+    ) -> dict[str, float]:
+        if (
+            plan.variant_id == "baseline"
+            and plan.policy_id == "binpack"
+            and plan.seed == 3
+            and plan.replication == 0
+        ):
+            raise RuntimeError("injected warm-up failure")
+        return {"completion-rate": float(int(plan.run_id[:4], 16) % 100) / 100.0}
+
+
 def test_run_plan_is_stable_and_sorted_across_seeds() -> None:
     config = StudyConfig.load(SMALL_CONFIG)
     template = load_scenario_template(config.scenario_path)
@@ -198,6 +215,47 @@ def test_parallel_failure_persists_other_completed_runs_for_resume(tmp_path: Pat
     )
 
     recovered = run_study(config_path, executor=_FlakyOncePerPlan(), workers=2)
+    assert recovered.run_count == expected_runs
+    assert recovered.resumed_count == expected_runs - 1
+
+
+def test_parallel_warmup_failure_preserves_other_runs_for_resume(tmp_path: Path) -> None:
+    config_path = _equivalent_overlay(tmp_path / "warmup-failure")
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw["execution"]["warmup_runs"] = 1
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    config = StudyConfig.load(config_path)
+    template = load_scenario_template(config.scenario_path)
+    expected_runs = len(build_run_plan(config, template, "f" * 64))
+
+    with pytest.raises(StudyRunError, match="injected warm-up failure"):
+        run_study(config_path, executor=_FailOneWarmup(), workers=2)
+
+    run_directories = sorted((config.output_directory / "runs").iterdir())
+    manifests = [
+        json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        for directory in run_directories
+    ]
+    failed_directory = next(
+        directory
+        for directory, manifest in zip(run_directories, manifests, strict=True)
+        if manifest["status"] == "failed"
+    )
+    assert len(run_directories) == expected_runs
+    assert sum(manifest["status"] == "failed" for manifest in manifests) == 1
+    assert sum(manifest["status"] == "complete" for manifest in manifests) == expected_runs - 1
+    assert (
+        json.loads((failed_directory / "attempts" / "warmup.json").read_text())["phase"] == "warmup"
+    )
+
+    def succeed(
+        _config: StudyConfig,
+        _template: ScenarioTemplate,
+        plan: StudyRunPlan,
+    ) -> dict[str, float]:
+        return {"completion-rate": float(int(plan.run_id[:4], 16) % 100) / 100.0}
+
+    recovered = run_study(config_path, executor=succeed, workers=2)
     assert recovered.run_count == expected_runs
     assert recovered.resumed_count == expected_runs - 1
 
