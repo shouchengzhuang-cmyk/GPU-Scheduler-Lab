@@ -151,7 +151,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           rm -rf dist build/release-wheel-venv
-          python -m build --wheel
+          python -m build --wheel --no-isolation
           python -m venv build/release-wheel-venv
           build/release-wheel-venv/bin/python -m pip install dist/*.whl
           build/release-wheel-venv/bin/gpu-scheduler-lab --help >/dev/null
