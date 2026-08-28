@@ -112,9 +112,7 @@ def _topology_retry_cluster() -> Cluster:
     "scheduler_name",
     ["fifo", "binpack", "spread", "topology", "preemptive", "backfill"],
 )
-def test_topology_failure_on_first_vendor_retries_compatible_vendor(
-    scheduler_name: str,
-) -> None:
+def test_topology_failure_on_first_vendor_retries_compatible_vendor(scheduler_name: str) -> None:
     cluster = _topology_retry_cluster()
     placement = create_scheduler(scheduler_name).place(cluster, _job())
 
