@@ -156,8 +156,8 @@ def _with_vendor_outage(scenario: Scenario, outage_vendor: AcceleratorVendor | N
         variant.metadata["vendor_outage"] = None
         return variant
     for node in variant.cluster.nodes:
-        if any(device.vendor is outage_vendor for device in node.gpus):
-            node.available = False
+        node.gpus = [device for device in node.gpus if device.vendor is not outage_vendor]
+    variant.cluster = variant.cluster.clone(preserve_allocations=True)
     variant.metadata["vendor_outage"] = outage_vendor.value
     return variant
 
