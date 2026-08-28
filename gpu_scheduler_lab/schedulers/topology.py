@@ -32,11 +32,7 @@ class TopologyAwareScheduler(Scheduler):
             vendor_order = list(allocated_vendors)
         else:
             vendor_order = sorted(
-                {
-                    gpu.vendor
-                    for gpu in cluster.schedulable_gpus
-                    if gpu.can_host(job)
-                },
+                {gpu.vendor for gpu in cluster.schedulable_gpus if gpu.can_host(job)},
                 key=lambda vendor: vendor.value,
             )
 
