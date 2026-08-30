@@ -40,6 +40,8 @@ SCHEDULERS = (
     "prefer-ascend",
 )
 
+DEFAULT_COMPARE_SCHEDULERS = SCHEDULERS[:-2]
+
 
 def _weighted_ints(value: str) -> tuple[tuple[int, float], ...]:
     try:
@@ -295,7 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     compare = subparsers.add_parser("compare", help="compare schedulers on one workload")
     compare.add_argument("--scenario", type=Path, required=True)
-    compare.add_argument("--schedulers", default=",".join(SCHEDULERS))
+    compare.add_argument("--schedulers", default=",".join(DEFAULT_COMPARE_SCHEDULERS))
     _add_output_args(compare)
     compare.set_defaults(handler=_compare)
 

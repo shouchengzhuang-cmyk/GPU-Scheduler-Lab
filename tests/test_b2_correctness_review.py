@@ -4,7 +4,10 @@ from typing import Any
 
 import pytest
 
+from gpu_scheduler_lab.admission import AdmissionController
+from gpu_scheduler_lab.cli import DEFAULT_COMPARE_SCHEDULERS, SCHEDULERS, build_parser
 from gpu_scheduler_lab.elastic import ElasticSpec
+from gpu_scheduler_lab.fairshare.accounting import AccountingPolicy
 from gpu_scheduler_lab.heterogeneous.study import _with_vendor_outage
 from gpu_scheduler_lab.models import (
     GPU,
@@ -16,7 +19,7 @@ from gpu_scheduler_lab.models import (
     Priority,
     TopologyMode,
 )
-from gpu_scheduler_lab.queues import QueueSpec, ResourceVector
+from gpu_scheduler_lab.queues import QueueHierarchy, QueueSpec, ResourceVector
 from gpu_scheduler_lab.scenario import Scenario
 from gpu_scheduler_lab.schedulers import PreemptiveScheduler, create_scheduler
 from gpu_scheduler_lab.simulator.engine import Simulator
@@ -323,3 +326,150 @@ def test_elastic_runnable_demand_uses_largest_single_vendor_capacity() -> None:
 
     satisfaction = result.metrics["queue_metrics"]["elastic"]["guaranteed_share_satisfaction"]
     assert satisfaction == pytest.approx(2 / 11)
+
+
+def test_single_replica_elastic_resize_keeps_its_allocated_vendor() -> None:
+    cluster = Cluster(
+        [
+            Node(
+                "nvidia",
+                [
+                    _gpu(
+                        "nvidia-0",
+                        "nvidia",
+                        AcceleratorVendor.NVIDIA,
+                        AcceleratorKind.GPU,
+                    )
+                ],
+            ),
+            Node(
+                "ascend",
+                [
+                    _gpu(
+                        "ascend-0",
+                        "ascend",
+                        AcceleratorVendor.HUAWEI_ASCEND,
+                        AcceleratorKind.NPU,
+                    )
+                ],
+            ),
+        ]
+    )
+    job = _job(id="elastic", gpu_count=2, elastic=ElasticSpec(1, 2, 2))
+    job.requested_replicas = 1
+    cluster.allocate(job, ["nvidia-0"])
+    job.current_replicas = 1
+
+    assert cluster.eligible_gpus(job) == []
+
+
+@pytest.mark.parametrize("mode", ["permissive", "quota-aware"])
+def test_admission_rejects_mixed_vendor_gang_as_impossible(mode: str) -> None:
+    cluster = Cluster(
+        [
+            Node(
+                "mixed",
+                [
+                    _gpu(
+                        "nvidia-0",
+                        "mixed",
+                        AcceleratorVendor.NVIDIA,
+                        AcceleratorKind.GPU,
+                    ),
+                    _gpu(
+                        "ascend-0",
+                        "mixed",
+                        AcceleratorVendor.HUAWEI_ASCEND,
+                        AcceleratorKind.NPU,
+                    ),
+                ],
+            )
+        ]
+    )
+    hierarchy = QueueHierarchy((QueueSpec("tenant", "root", limit=ResourceVector(2, 128)),))
+    controller = AdmissionController(hierarchy, cluster, AccountingPolicy(), mode)
+
+    decision = controller.decide(_job(id="mixed-gang", queue_id="tenant"))
+    assert not decision.admitted
+    assert decision.reason == "impossible_gpu_request"
+
+
+def test_compare_default_excludes_vendor_preference_routes() -> None:
+    args = build_parser().parse_args(["compare", "--scenario", "scenarios/demo.yaml"])
+
+    assert args.schedulers == ",".join(DEFAULT_COMPARE_SCHEDULERS)
+    assert "prefer-nvidia" not in args.schedulers
+    assert "prefer-ascend" not in args.schedulers
+    assert {"prefer-nvidia", "prefer-ascend"}.issubset(SCHEDULERS)
+
+
+def test_reclaim_does_not_evict_from_an_infeasible_vendor() -> None:
+    cluster = Cluster(
+        [
+            Node(
+                "nvidia",
+                [
+                    _gpu(
+                        f"nvidia-{index}",
+                        "nvidia",
+                        AcceleratorVendor.NVIDIA,
+                        AcceleratorKind.GPU,
+                    )
+                    for index in range(3)
+                ],
+            ),
+            Node(
+                "ascend",
+                [
+                    _gpu(
+                        f"ascend-{index}",
+                        "ascend",
+                        AcceleratorVendor.HUAWEI_ASCEND,
+                        AcceleratorKind.NPU,
+                    )
+                    for index in range(2)
+                ],
+            ),
+        ]
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            _job(
+                id="nvidia-victim",
+                duration=10,
+                gpu_count=2,
+                allowed_vendors=(AcceleratorVendor.NVIDIA,),
+                allowed_kinds=(AcceleratorKind.GPU,),
+                queue_id="borrower",
+            ),
+            _job(
+                id="ascend-victim",
+                duration=10,
+                gpu_count=1,
+                allowed_vendors=(AcceleratorVendor.HUAWEI_ASCEND,),
+                allowed_kinds=(AcceleratorKind.NPU,),
+                priority=Priority.LOW,
+                queue_id="borrower",
+            ),
+            _job(id="incoming", arrival_time=1, duration=1, gpu_count=3, queue_id="product"),
+        ],
+        queues=(
+            QueueSpec("borrower", "root", limit=ResourceVector(3, 192)),
+            QueueSpec(
+                "product",
+                "root",
+                guaranteed=ResourceVector(3, 192),
+                limit=ResourceVector(3, 192),
+            ),
+        ),
+    )
+
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-reclaim", scenario)
+    ).run()
+    simulated = {job.id: job for job in result.jobs}
+
+    assert simulated["incoming"].first_start_time == 1
+    assert simulated["nvidia-victim"].preemption_count == 1
+    assert simulated["ascend-victim"].preemption_count == 0

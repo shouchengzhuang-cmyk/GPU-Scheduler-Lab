@@ -188,7 +188,7 @@ class Cluster:
         candidates = [
             gpu for node in self.schedulable_nodes for gpu in node.gpus if gpu.can_host(request)
         ]
-        if not isinstance(request, Job) or request.requested_gpu_count <= 1:
+        if not isinstance(request, Job):
             return candidates
         if request.allocated_gpu_ids:
             allocated_vendors = {
@@ -198,6 +198,8 @@ class Cluster:
                 return []
             allocated_vendor = next(iter(allocated_vendors))
             return [gpu for gpu in candidates if gpu.vendor is allocated_vendor]
+        if request.requested_gpu_count <= 1:
+            return candidates
         by_vendor: dict[AcceleratorVendor, list[GPU]] = {}
         for gpu in candidates:
             by_vendor.setdefault(gpu.vendor, []).append(gpu)

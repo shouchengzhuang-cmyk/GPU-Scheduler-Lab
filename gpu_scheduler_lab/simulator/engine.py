@@ -73,6 +73,15 @@ class SimulationResult:
         return payload
 
 
+@dataclass(slots=True)
+class _ReclaimPlan:
+    score: tuple[Any, ...]
+    planned_targets: dict[str, list[str]]
+    preempted_ids: list[str]
+    entitlement_queue_ids: set[str]
+    placement: list[str]
+
+
 class Simulator:
     def __init__(
         self,
@@ -651,13 +660,112 @@ class Simulator:
             *self.checkpointing.values(),
             *self.restarting.values(),
         ]
-        projected = self._placement_cluster(incoming).clone(preserve_allocations=True)
+        placement_cluster = self._placement_cluster(incoming)
+        compatible_vendors = sorted(
+            {
+                gpu.vendor
+                for gpu in placement_cluster.schedulable_gpus
+                if gpu.is_compatible(incoming)
+            },
+            key=lambda vendor: vendor.value,
+        )
+        plans = [
+            plan
+            for vendor in compatible_vendors
+            if (
+                plan := self._plan_reclaim_for_vendor(
+                    incoming,
+                    now,
+                    placement_cluster,
+                    actual_allocated,
+                    vendor,
+                )
+            )
+            is not None
+        ]
+        self.scheduler.prepare(now, self.cluster, self.pending, actual_allocated)
+        if not plans:
+            return None
+        plan = min(plans, key=lambda item: item.score)
+
+        for job_id, target in sorted(plan.planned_targets.items()):
+            job = self.running[job_id]
+            if target == job.allocated_gpu_ids:
+                continue
+            self._accrue_productive_work(job, now)
+            old = job.current_replicas
+            self.cluster.resize(job, target)
+            job.current_replicas = len(target)
+            job.requested_replicas = len(target)
+            job.elastic_scale_down_count += 1
+            job.resize_churn_count += 1
+            job.run_generation += 1
+            job.last_start_time = now
+            self._last_resize_time[job.id] = now
+            gpu_ids = tuple(target)
+            self.trace.append(
+                TraceRecord(
+                    now,
+                    EventType.ELASTIC_SCALE_DOWN,
+                    job.id,
+                    gpu_ids,
+                    self._node_ids(gpu_ids),
+                    detail=f"reason=PREEMPT_RECLAIM;replicas={old}->{len(target)}",
+                )
+            )
+            self._schedule_completion(job, now)
+
+        selected = [self.running[job_id] for job_id in plan.preempted_ids]
+        defer_victims = any(victim.checkpoint_cost > 0 for victim in selected)
+        if defer_victims:
+            self._preemption_reserved_gpus[incoming.id] = set(plan.placement)
+            self._preemption_reservation_reason[incoming.id] = "PREEMPT_RECLAIM"
+            self._preemption_reclaim_entitlements[incoming.id] = set(plan.entitlement_queue_ids)
+            for victim in selected:
+                self._preemption_target_by_victim[victim.id] = incoming.id
+        for victim in selected:
+            self._begin_preemption(victim, now, incoming.id, "PREEMPT_RECLAIM")
+        if defer_victims:
+            return None
+
+        allocated = [
+            *self.running.values(),
+            *self.checkpointing.values(),
+            *self.restarting.values(),
+        ]
+        self.scheduler.prepare(now, self.cluster, self.pending, allocated)
+        placement = self.scheduler.place(self._placement_cluster(incoming), incoming)
+        if placement is None or not self.scheduler.can_reclaim_placement(
+            incoming,
+            placement,
+            plan.entitlement_queue_ids,
+        ):
+            raise RuntimeError("committed reclaim plan did not preserve target placement")
+        return placement
+
+    def _plan_reclaim_for_vendor(
+        self,
+        incoming: Job,
+        now: float,
+        placement_cluster: Cluster,
+        actual_allocated: list[Job],
+        vendor: AcceleratorVendor,
+    ) -> _ReclaimPlan | None:
+        projected = placement_cluster.clone(preserve_allocations=True, vendor=vendor)
         projected_jobs: dict[str, Job] = {}
         for job in actual_allocated:
+            allocated_gpu_ids = [
+                gpu_id
+                for gpu_id in job.allocated_gpu_ids
+                if placement_cluster.gpu_by_id(gpu_id).vendor is vendor
+            ]
+            if not allocated_gpu_ids:
+                continue
             projected_job = copy(job)
-            projected_job.allocated_gpu_ids = list(job.allocated_gpu_ids)
+            projected_job.allocated_gpu_ids = allocated_gpu_ids
+            projected_job.current_replicas = len(allocated_gpu_ids)
             projected_jobs[job.id] = projected_job
-        allocated_order = [job.id for job in actual_allocated]
+        allocated_order = [job.id for job in actual_allocated if job.id in projected_jobs]
         planned_targets: dict[str, list[str]] = {}
         preempted_ids: list[str] = []
         entitlement_queue_ids: set[str] = set()
@@ -684,6 +792,8 @@ class Simulator:
         while projected_placement is None:
             elastic_actions: list[tuple[tuple[Any, ...], str, str, str]] = []
             for job in self.running.values():
+                if job.id not in projected_jobs:
+                    continue
                 projected_job = projected_jobs[job.id]
                 if (
                     projected_job.elastic is None
@@ -737,7 +847,7 @@ class Simulator:
         while projected_placement is None:
             victim_actions: list[tuple[tuple[Any, ...], str, str]] = []
             for job in self.running.values():
-                if job.id in preempted_ids:
+                if job.id in preempted_ids or job.id not in projected_jobs:
                     continue
                 projected_job = projected_jobs[job.id]
                 released = list(projected_job.allocated_gpu_ids)
@@ -792,64 +902,28 @@ class Simulator:
             refresh_projected()
             projected_placement = target_placement()
 
-        self.scheduler.prepare(now, self.cluster, self.pending, actual_allocated)
         if projected_placement is None:
             return None
-
-        for job_id, target in sorted(planned_targets.items()):
-            job = self.running[job_id]
-            if target == job.allocated_gpu_ids:
-                continue
-            self._accrue_productive_work(job, now)
-            old = job.current_replicas
-            self.cluster.resize(job, target)
-            job.current_replicas = len(target)
-            job.requested_replicas = len(target)
-            job.elastic_scale_down_count += 1
-            job.resize_churn_count += 1
-            job.run_generation += 1
-            job.last_start_time = now
-            self._last_resize_time[job.id] = now
-            gpu_ids = tuple(target)
-            self.trace.append(
-                TraceRecord(
-                    now,
-                    EventType.ELASTIC_SCALE_DOWN,
-                    job.id,
-                    gpu_ids,
-                    self._node_ids(gpu_ids),
-                    detail=f"reason=PREEMPT_RECLAIM;replicas={old}->{len(target)}",
-                )
-            )
-            self._schedule_completion(job, now)
-
-        selected = [self.running[job_id] for job_id in preempted_ids]
-        defer_victims = any(victim.checkpoint_cost > 0 for victim in selected)
-        if defer_victims:
-            self._preemption_reserved_gpus[incoming.id] = set(projected_placement)
-            self._preemption_reservation_reason[incoming.id] = "PREEMPT_RECLAIM"
-            self._preemption_reclaim_entitlements[incoming.id] = set(entitlement_queue_ids)
-            for victim in selected:
-                self._preemption_target_by_victim[victim.id] = incoming.id
-        for victim in selected:
-            self._begin_preemption(victim, now, incoming.id, "PREEMPT_RECLAIM")
-        if defer_victims:
-            return None
-
-        allocated = [
-            *self.running.values(),
-            *self.checkpointing.values(),
-            *self.restarting.values(),
-        ]
-        self.scheduler.prepare(now, self.cluster, self.pending, allocated)
-        placement = self.scheduler.place(self._placement_cluster(incoming), incoming)
-        if placement is None or not self.scheduler.can_reclaim_placement(
-            incoming,
-            placement,
-            entitlement_queue_ids,
-        ):
-            raise RuntimeError("committed reclaim plan did not preserve target placement")
-        return placement
+        elastic_reductions = sum(
+            self.running[job_id].current_replicas - len(target)
+            for job_id, target in planned_targets.items()
+        )
+        return _ReclaimPlan(
+            score=(
+                sum(
+                    self.running[job_id].checkpoint_cost + self.running[job_id].restart_cost
+                    for job_id in preempted_ids
+                ),
+                len(preempted_ids),
+                elastic_reductions,
+                tuple(preempted_ids),
+                vendor.value,
+            ),
+            planned_targets=planned_targets,
+            preempted_ids=preempted_ids,
+            entitlement_queue_ids=entitlement_queue_ids,
+            placement=projected_placement,
+        )
 
     def _suitable_gpu_count(self, victim: Job, incoming: Job) -> int:
         return sum(
