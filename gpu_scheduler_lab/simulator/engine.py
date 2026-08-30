@@ -13,6 +13,7 @@ from gpu_scheduler_lab.fleet.events import FleetEventType, schedulable_node_snap
 from gpu_scheduler_lab.metrics.fairness import jains_fairness_index
 from gpu_scheduler_lab.metrics.fragmentation import fragmentation_snapshot
 from gpu_scheduler_lab.metrics.summary import build_metrics
+from gpu_scheduler_lab.models.accelerator import AcceleratorVendor
 from gpu_scheduler_lab.models.cluster import Cluster
 from gpu_scheduler_lab.models.events import EVENT_ORDER, Event, EventType, TraceRecord
 from gpu_scheduler_lab.models.job import Job, JobStatus
@@ -544,7 +545,7 @@ class Simulator:
         if reason == "PREEMPT_RECLAIM":
             return self._reclaim_for(incoming, now)
         incoming_priority = incoming.effective_priority(now, self.scheduler.aging_interval)
-        victims = [
+        eligible_victims = [
             job
             for job in self.running.values()
             if any(
@@ -556,8 +557,9 @@ class Simulator:
                 and job.priority < incoming.priority
             )
         ]
-        victims.sort(
-            key=lambda job: (
+
+        def victim_key(job: Job) -> tuple[Any, ...]:
+            return (
                 job.effective_priority(now, self.scheduler.aging_interval),
                 -self._suitable_gpu_count(job, incoming),
                 len(job.allocated_gpu_ids),
@@ -566,21 +568,59 @@ class Simulator:
                 -job.borrowed_gpu_units,
                 job.id,
             )
+
+        placement_cluster = self._placement_cluster(incoming)
+        compatible_vendors = sorted(
+            {
+                gpu.vendor
+                for gpu in placement_cluster.schedulable_gpus
+                if gpu.is_compatible(incoming)
+            },
+            key=lambda vendor: vendor.value,
         )
-        selected: list[Job] = []
-        projected = self._placement_cluster(incoming).clone(preserve_allocations=True)
-        projected_placement: list[str] | None = None
-        for victim in victims:
-            selected.append(victim)
-            for gpu in projected.gpus:
-                if gpu.owner_job_id == victim.id:
-                    gpu.owner_job_id = None
-                    gpu.allocated_memory_gb = 0.0
+        plans: list[tuple[tuple[Any, ...], list[Job], list[str]]] = []
+        for vendor in compatible_vendors:
+            projected = placement_cluster.clone(preserve_allocations=True, vendor=vendor)
+            victims = sorted(
+                (
+                    job
+                    for job in eligible_victims
+                    if any(
+                        self.cluster.gpu_by_id(gpu_id).vendor is vendor
+                        for gpu_id in job.allocated_gpu_ids
+                    )
+                ),
+                key=victim_key,
+            )
+            selected: list[Job] = []
             projected_placement = self.scheduler.place(projected, incoming)
-            if projected_placement is not None:
-                break
-        if projected_placement is None:
+            for victim in victims:
+                if projected_placement is not None:
+                    break
+                selected.append(victim)
+                for gpu in projected.gpus:
+                    if gpu.owner_job_id == victim.id:
+                        gpu.owner_job_id = None
+                        gpu.allocated_memory_gb = 0.0
+                projected_placement = self.scheduler.place(projected, incoming)
+            if projected_placement is None:
+                continue
+            plans.append(
+                (
+                    (
+                        sum(job.checkpoint_cost + job.restart_cost for job in selected),
+                        len(selected),
+                        sum(len(job.allocated_gpu_ids) for job in selected),
+                        tuple(victim_key(job) for job in selected),
+                        vendor.value,
+                    ),
+                    selected,
+                    projected_placement,
+                )
+            )
+        if not plans:
             return None
+        _, selected, projected_placement = min(plans, key=lambda plan: plan[0])
         defer_victims = any(victim.checkpoint_cost > 0 for victim in selected)
         if defer_victims:
             self._preemption_reserved_gpus[incoming.id] = set(projected_placement)
@@ -1251,7 +1291,16 @@ class Simulator:
                 for gpu in node.gpus
                 if gpu.is_compatible(job)
             ]
-            replicas = min(job.preferred_gpu_count, len(compatible))
+            compatible_by_vendor: dict[AcceleratorVendor, int] = {}
+            for gpu in compatible:
+                compatible_by_vendor[gpu.vendor] = compatible_by_vendor.get(gpu.vendor, 0) + 1
+            replicas = max(
+                (
+                    min(job.preferred_gpu_count, vendor_capacity)
+                    for vendor_capacity in compatible_by_vendor.values()
+                ),
+                default=0,
+            )
             if replicas < job.minimum_gpu_count:
                 continue
             try:

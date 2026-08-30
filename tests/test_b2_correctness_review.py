@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from gpu_scheduler_lab.elastic import ElasticSpec
 from gpu_scheduler_lab.heterogeneous.study import _with_vendor_outage
 from gpu_scheduler_lab.models import (
     GPU,
@@ -12,10 +13,13 @@ from gpu_scheduler_lab.models import (
     Cluster,
     Job,
     Node,
+    Priority,
     TopologyMode,
 )
+from gpu_scheduler_lab.queues import QueueSpec, ResourceVector
 from gpu_scheduler_lab.scenario import Scenario
-from gpu_scheduler_lab.schedulers import create_scheduler
+from gpu_scheduler_lab.schedulers import PreemptiveScheduler, create_scheduler
+from gpu_scheduler_lab.simulator.engine import Simulator
 
 
 def _gpu(
@@ -190,3 +194,132 @@ def test_vendor_outage_preserves_other_vendor_on_mixed_node(
     assert variant.cluster.gpu_by_id(healthy_id).vendor is healthy_vendor
     with pytest.raises(KeyError):
         variant.cluster.gpu_by_id(failed_id)
+
+
+def test_priority_preemption_does_not_evict_from_an_infeasible_vendor() -> None:
+    cluster = Cluster(
+        [
+            Node(
+                "nvidia",
+                [
+                    _gpu(
+                        f"nvidia-{index}",
+                        "nvidia",
+                        AcceleratorVendor.NVIDIA,
+                        AcceleratorKind.GPU,
+                    )
+                    for index in range(3)
+                ],
+            ),
+            Node(
+                "ascend",
+                [
+                    _gpu(
+                        f"ascend-{index}",
+                        "ascend",
+                        AcceleratorVendor.HUAWEI_ASCEND,
+                        AcceleratorKind.NPU,
+                    )
+                    for index in range(2)
+                ],
+            ),
+        ]
+    )
+    nvidia_victim = _job(
+        id="nvidia-victim",
+        gpu_count=2,
+        allowed_vendors=(AcceleratorVendor.NVIDIA,),
+        allowed_kinds=(AcceleratorKind.GPU,),
+        priority=Priority.NORMAL,
+    )
+    ascend_victim = _job(
+        id="ascend-victim",
+        gpu_count=1,
+        allowed_vendors=(AcceleratorVendor.HUAWEI_ASCEND,),
+        allowed_kinds=(AcceleratorKind.NPU,),
+        priority=Priority.LOW,
+    )
+    incoming = _job(
+        id="incoming",
+        arrival_time=1,
+        gpu_count=3,
+        priority=Priority.CRITICAL,
+    )
+
+    result = Simulator(
+        cluster,
+        [nvidia_victim, ascend_victim, incoming],
+        PreemptiveScheduler(),
+    ).run()
+    simulated = {job.id: job for job in result.jobs}
+
+    assert simulated["incoming"].first_start_time == 1
+    assert simulated["nvidia-victim"].preemption_count == 1
+    assert simulated["ascend-victim"].preemption_count == 0
+
+
+def test_elastic_runnable_demand_uses_largest_single_vendor_capacity() -> None:
+    cluster = Cluster(
+        [
+            Node(
+                "nvidia",
+                [
+                    _gpu(
+                        f"nvidia-{index}",
+                        "nvidia",
+                        AcceleratorVendor.NVIDIA,
+                        AcceleratorKind.GPU,
+                    )
+                    for index in range(2)
+                ],
+            ),
+            Node(
+                "ascend",
+                [
+                    _gpu(
+                        f"ascend-{index}",
+                        "ascend",
+                        AcceleratorVendor.HUAWEI_ASCEND,
+                        AcceleratorKind.NPU,
+                    )
+                    for index in range(2)
+                ],
+            ),
+        ]
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            _job(
+                id="nvidia-blocker",
+                duration=10,
+                allowed_vendors=(AcceleratorVendor.NVIDIA,),
+                allowed_kinds=(AcceleratorKind.GPU,),
+                queue_id="blockers",
+            ),
+            _job(
+                id="ascend-blocker",
+                duration=10,
+                allowed_vendors=(AcceleratorVendor.HUAWEI_ASCEND,),
+                allowed_kinds=(AcceleratorKind.NPU,),
+                queue_id="blockers",
+            ),
+            _job(
+                id="elastic",
+                arrival_time=1,
+                duration=1,
+                gpu_count=4,
+                elastic=ElasticSpec(1, 4, 4),
+                queue_id="elastic",
+            ),
+        ],
+        queues=(
+            QueueSpec("blockers", "root", limit=ResourceVector(4, 256)),
+            QueueSpec("elastic", "root", guaranteed=ResourceVector(2, 128)),
+        ),
+    )
+
+    result = Simulator.from_scenario(scenario, create_scheduler("drf", scenario)).run()
+
+    satisfaction = result.metrics["queue_metrics"]["elastic"]["guaranteed_share_satisfaction"]
+    assert satisfaction == pytest.approx(2 / 11)
