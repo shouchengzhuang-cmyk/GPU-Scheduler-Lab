@@ -77,20 +77,22 @@ class AdmissionController:
         return AdmissionDecision(True)
 
     def _feasible_gpu_sets(self, job: Job, compatible: list[GPU], minimum: int) -> list[list[GPU]]:
-        groups: dict[str, list[GPU]]
+        groups: dict[tuple[str, str], list[GPU]]
         if job.topology_mode is TopologyMode.REQUIRE_SAME_NODE:
             groups = {}
             for gpu in compatible:
-                groups.setdefault(gpu.node_id, []).append(gpu)
+                groups.setdefault((gpu.node_id, gpu.vendor.value), []).append(gpu)
         elif job.topology_mode is TopologyMode.REQUIRE_SAME_RACK:
             nodes = {node.id: node for node in self.cluster.nodes}
             groups = {}
             for gpu in compatible:
                 node = nodes[gpu.node_id]
                 rack = topology_domain(node.id, node.topology, "rack")
-                groups.setdefault(rack, []).append(gpu)
+                groups.setdefault((rack, gpu.vendor.value), []).append(gpu)
         else:
-            groups = {"cluster": compatible}
+            groups = {}
+            for gpu in compatible:
+                groups.setdefault(("cluster", gpu.vendor.value), []).append(gpu)
         return [gpu_set for gpu_set in groups.values() if len(gpu_set) >= minimum]
 
     @staticmethod

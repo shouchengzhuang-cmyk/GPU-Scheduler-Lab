@@ -20,13 +20,42 @@ class TopologyAwareScheduler(Scheduler):
     name = "topology"
 
     def place(self, cluster: Cluster, job: Job) -> list[str] | None:
+        if job.requested_gpu_count <= 1:
+            return self._place_candidates(cluster, cluster, job)
+
+        if job.allocated_gpu_ids:
+            allocated_vendors = {
+                cluster.gpu_by_id(device_id).vendor for device_id in job.allocated_gpu_ids
+            }
+            if len(allocated_vendors) != 1:
+                return None
+            vendor_order = list(allocated_vendors)
+        else:
+            vendor_order = sorted(
+                {gpu.vendor for gpu in cluster.schedulable_gpus if gpu.can_host(job)},
+                key=lambda vendor: vendor.value,
+            )
+
+        for vendor in vendor_order:
+            vendor_cluster = cluster.clone(preserve_allocations=True, vendor=vendor)
+            placement = self._place_candidates(vendor_cluster, cluster, job)
+            if placement is not None:
+                return placement
+        return None
+
+    def _place_candidates(
+        self,
+        candidate_cluster: Cluster,
+        score_cluster: Cluster,
+        job: Job,
+    ) -> list[str] | None:
         eligible = sorted(
-            cluster.eligible_gpus(job),
+            candidate_cluster.eligible_gpus(job),
             key=lambda gpu: (gpu.memory_capacity_gb - job.gpu_memory_gb, gpu.node_id, gpu.id),
         )
         if len(eligible) < job.requested_gpu_count:
             return None
-        nodes = {node.id: node for node in cluster.schedulable_nodes}
+        nodes = {node.id: node for node in candidate_cluster.schedulable_nodes}
         candidates = self._candidate_placements(eligible, nodes, job.requested_gpu_count)
         topologies = {node_id: node.topology for node_id, node in nodes.items()}
         feasible = [
@@ -40,7 +69,7 @@ class TopologyAwareScheduler(Scheduler):
         ]
         if not feasible:
             return None
-        selected = min(feasible, key=lambda item: self._score(cluster, nodes, item, job))
+        selected = min(feasible, key=lambda item: self._score(score_cluster, nodes, item, job))
         return sorted(gpu.id for gpu in selected)
 
     @staticmethod

@@ -11,6 +11,7 @@ from gpu_scheduler_lab.schedulers.fifo import FIFOScheduler
 from gpu_scheduler_lab.schedulers.preemptive import PreemptiveScheduler
 from gpu_scheduler_lab.schedulers.spread import SpreadScheduler
 from gpu_scheduler_lab.schedulers.topology import TopologyAwareScheduler
+from gpu_scheduler_lab.schedulers.vendor import VendorPreferenceScheduler
 
 if TYPE_CHECKING:
     from gpu_scheduler_lab.scenario import Scenario
@@ -18,6 +19,14 @@ if TYPE_CHECKING:
 
 def create_scheduler(name: str, scenario: Scenario | None = None) -> Scheduler:
     normalized = name.lower()
+    if normalized == "prefer-nvidia":
+        from gpu_scheduler_lab.models.accelerator import AcceleratorVendor
+
+        return VendorPreferenceScheduler(AcceleratorVendor.NVIDIA)
+    if normalized == "prefer-ascend":
+        from gpu_scheduler_lab.models.accelerator import AcceleratorVendor
+
+        return VendorPreferenceScheduler(AcceleratorVendor.HUAWEI_ASCEND)
     if normalized in {
         "drf",
         "historical-drf",
@@ -62,5 +71,6 @@ __all__ = [
     "Scheduler",
     "SpreadScheduler",
     "TopologyAwareScheduler",
+    "VendorPreferenceScheduler",
     "create_scheduler",
 ]

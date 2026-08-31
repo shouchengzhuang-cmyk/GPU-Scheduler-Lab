@@ -1,0 +1,155 @@
+metadata:
+  name: heterogeneous-dual-stack
+  evidence_kind: SIMULATED
+  workload_values: SYNTHETIC
+nodes:
+  - id: nvidia-a
+    topology: {zone: z1, rack: r1}
+    gpus:
+      - id: nvidia-a0
+        vendor: nvidia
+        kind: gpu
+        model: A100-80GB
+        memory_gb: 80
+        runtime_profiles: [nvidia-vllm-k8s]
+        capabilities: [bf16, tensor-parallel]
+      - id: nvidia-a1
+        vendor: nvidia
+        kind: gpu
+        model: A100-80GB
+        memory_gb: 80
+        runtime_profiles: [nvidia-vllm-k8s]
+        capabilities: [bf16, tensor-parallel]
+  - id: nvidia-b
+    topology: {zone: z1, rack: r2}
+    gpus:
+      - id: nvidia-b0
+        vendor: nvidia
+        kind: gpu
+        model: L40S
+        memory_gb: 48
+        runtime_profiles: [nvidia-vllm-k8s]
+        capabilities: [bf16]
+      - id: nvidia-b1
+        vendor: nvidia
+        kind: gpu
+        model: L40S
+        memory_gb: 48
+        runtime_profiles: [nvidia-vllm-k8s]
+        capabilities: [bf16]
+  - id: ascend-a
+    topology: {zone: z2, rack: r3}
+    gpus:
+      - id: ascend-a0
+        vendor: huawei-ascend
+        kind: npu
+        model: Ascend-910B
+        memory_gb: 64
+        runtime_profiles: [ascend-vllm-k8s]
+        capabilities: [bf16, tensor-parallel]
+      - id: ascend-a1
+        vendor: huawei-ascend
+        kind: npu
+        model: Ascend-910B
+        memory_gb: 64
+        runtime_profiles: [ascend-vllm-k8s]
+        capabilities: [bf16, tensor-parallel]
+  - id: ascend-b
+    topology: {zone: z2, rack: r4}
+    gpus:
+      - id: ascend-b0
+        vendor: huawei-ascend
+        kind: npu
+        model: Ascend-910B
+        memory_gb: 64
+        runtime_profiles: [ascend-vllm-k8s]
+        capabilities: [bf16]
+      - id: ascend-b1
+        vendor: huawei-ascend
+        kind: npu
+        model: Ascend-910B
+        memory_gb: 64
+        runtime_profiles: [ascend-vllm-k8s]
+        capabilities: [bf16]
+queues:
+  - id: research
+    parent: root
+    guaranteed: {gpu_units: 2}
+    limit: {gpu_units: 4}
+    borrowing_enabled: true
+    reclaimable: true
+  - id: product
+    parent: root
+    guaranteed: {gpu_units: 6}
+    limit: {gpu_units: 8}
+    borrowing_enabled: true
+    reclaimable: true
+admission: {mode: quota-aware}
+fairshare: {half_life: 20, starvation_threshold: 30}
+jobs:
+  - id: research-borrower
+    queue: research
+    group: research
+    arrival_time: 0
+    duration: 30
+    gpu_count: 4
+    gpu_memory_gb: 40
+    priority: low
+    type: training
+    gang: true
+    checkpoint_cost: 1
+    restart_cost: 1
+    allowed_vendors: [nvidia, huawei-ascend]
+    allowed_kinds: [gpu, npu]
+    allowed_models: []
+    required_capabilities: [bf16]
+    runtime_profile: null
+    selection_policy: any
+  - id: product-nvidia
+    queue: product
+    group: product
+    arrival_time: 2
+    duration: 8
+    gpu_count: 2
+    gpu_memory_gb: 40
+    priority: critical
+    type: inference
+    gang: true
+    allowed_vendors: [nvidia]
+    allowed_kinds: [gpu]
+    allowed_models: [A100-80GB]
+    required_capabilities: [bf16, tensor-parallel]
+    runtime_profile: nvidia-vllm-k8s
+    selection_policy: any
+  - id: product-ascend
+    queue: product
+    group: product
+    arrival_time: 2.5
+    duration: 8
+    gpu_count: 2
+    gpu_memory_gb: 40
+    priority: critical
+    type: inference
+    gang: true
+    allowed_vendors: [huawei-ascend]
+    allowed_kinds: [npu]
+    allowed_models: [Ascend-910B]
+    required_capabilities: [bf16, tensor-parallel]
+    runtime_profile: ascend-vllm-k8s
+    selection_policy: any
+  - id: research-flex
+    queue: research
+    group: research
+    arrival_time: 4
+    duration: 10
+    gpu_count: 1
+    gpu_memory_gb: 32
+    priority: normal
+    type: inference
+    gang: false
+    allowed_vendors: [nvidia, huawei-ascend]
+    allowed_kinds: [gpu, npu]
+    allowed_models: []
+    required_capabilities: [bf16]
+    runtime_profile: null
+    selection_policy: any

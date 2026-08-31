@@ -35,7 +35,7 @@ v2 在 v1 文件形状上增加类型化 accelerator 字段。为保持传输兼
 | Device `capabilities` | GPU `capabilities` | 非空 string 的去重数组 |
 | Task `allowed_vendors` / `allowed_kinds` | Job 同名约束 | 只保存明确值，不从 model 推断 |
 | Task `allowed_models` | Job `allowed_models` | 与 legacy `allowed_gpu_models` 分开 |
-| Task `required_capabilities` | Job 同名约束 | B1 只承载合同，匹配行为属于 B2 |
+| Task `required_capabilities` | Job 同名约束 | typed placement 必须满足全部 capability |
 | Task `runtime_profile` | Job `runtime_profile` | 可为 null 或非空 string |
 | Task `selection_policy` | Job `selection_policy` | v2 固定为 `any` |
 
@@ -81,6 +81,6 @@ Mini-AI-Cloud 可把它作为离线 policy study artifact 保存，但不得把 
 - 不从生产数据库直接导出或回写；
 - 不把 v2 结果回写 Mini-AI-Cloud；文件合同是单向离线输入；
 - 不共享 SQLAlchemy/Pydantic 内部类；
-- 不在 B1 实现 vendor-aware placement、性能画像或跨厂商 fallback；这些属于 B2；
+- 不把 simulator 的 vendor preference、fallback 或 calibrated profile 解释为真实硬件性能；
 - 不替代 Mini-AI-Cloud 的 transaction、reservation、lease、execution fencing；
 - 不声称模拟结果验证真实 Docker/Kubernetes/GPU runtime。

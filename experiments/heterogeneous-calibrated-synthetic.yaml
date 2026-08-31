@@ -1,0 +1,26 @@
+study:
+  name: heterogeneous-calibrated-synthetic
+  mode: calibrated
+scenario: scenarios/heterogeneous-dual-stack.yaml
+v2_contract_fixture: tests/fixtures/mini_ai_cloud/v2-golden.json
+route_policies: [prefer-nvidia, prefer-ascend]
+outage_vendors: [nvidia, huawei-ascend]
+performance_profiles:
+  - source_kind: SYNTHETIC
+    source_id: synthetic-example-nvidia
+    model_variant: demo-model@nvidia-a100
+    ttft_ms: 100
+    tpot_ms: 10
+    throughput_tokens_s: 100
+    power_watts: 300
+    cost_per_hour: 1
+  - source_kind: SYNTHETIC
+    source_id: synthetic-example-ascend
+    model_variant: demo-model@ascend-910b
+    ttft_ms: 100
+    tpot_ms: 10
+    throughput_tokens_s: 100
+    power_watts: 300
+    cost_per_hour: 1
+output:
+  directory: experiment-results/heterogeneous-calibrated-synthetic

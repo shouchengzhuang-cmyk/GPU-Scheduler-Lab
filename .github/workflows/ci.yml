@@ -96,3 +96,11 @@ jobs:
         run: python -m gpu_scheduler_lab experiment --config experiments/phase3-elastic.yaml
       - name: Phase III revocable fleet smoke
         run: python -m gpu_scheduler_lab experiment --config experiments/phase3-revocable-fleet.yaml
+      - name: Heterogeneous correctness smoke
+        run: >-
+          python -m gpu_scheduler_lab heterogeneous-study
+          --config experiments/heterogeneous-correctness.yaml
+      - name: Heterogeneous calibrated synthetic smoke
+        run: >-
+          python -m gpu_scheduler_lab heterogeneous-study
+          --config experiments/heterogeneous-calibrated-synthetic.yaml
