@@ -617,10 +617,10 @@ class Simulator:
             plans.append(
                 (
                     (
+                        tuple(victim_key(job) for job in selected),
                         sum(job.checkpoint_cost + job.restart_cost for job in selected),
                         len(selected),
                         sum(len(job.allocated_gpu_ids) for job in selected),
-                        tuple(victim_key(job) for job in selected),
                         vendor.value,
                     ),
                     selected,

@@ -145,6 +145,26 @@
           {
             "if": {"properties": {"gpu_count": {"minimum": 1}}},
             "then": {"required": ["gpu_memory_mb"]}
+          },
+          {
+            "anyOf": [
+              {"properties": {"allowed_vendors": {"maxItems": 0}}},
+              {"properties": {"allowed_kinds": {"maxItems": 0}}},
+              {
+                "required": ["allowed_vendors", "allowed_kinds"],
+                "properties": {
+                  "allowed_vendors": {"contains": {"const": "nvidia"}},
+                  "allowed_kinds": {"contains": {"const": "gpu"}}
+                }
+              },
+              {
+                "required": ["allowed_vendors", "allowed_kinds"],
+                "properties": {
+                  "allowed_vendors": {"contains": {"const": "huawei-ascend"}},
+                  "allowed_kinds": {"contains": {"const": "npu"}}
+                }
+              }
+            ]
           }
         ],
         "additionalProperties": true
