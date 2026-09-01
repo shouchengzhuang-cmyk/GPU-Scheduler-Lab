@@ -768,6 +768,7 @@ class Simulator:
         allocated_order = [job.id for job in actual_allocated if job.id in projected_jobs]
         planned_targets: dict[str, list[str]] = {}
         preempted_ids: list[str] = []
+        selected_action_keys: list[tuple[Any, ...]] = []
         entitlement_queue_ids: set[str] = set()
 
         def projected_allocated() -> list[Job]:
@@ -831,7 +832,8 @@ class Simulator:
                     )
             if not elastic_actions:
                 break
-            _, job_id, gpu_id, entitlement = min(elastic_actions, key=lambda item: item[0])
+            action_key, job_id, gpu_id, entitlement = min(elastic_actions, key=lambda item: item[0])
+            selected_action_keys.append(action_key)
             projected_job = projected_jobs[job_id]
             target = [item for item in projected_job.allocated_gpu_ids if item != gpu_id]
             planned_targets[job_id] = target
@@ -888,7 +890,8 @@ class Simulator:
                 )
             if not victim_actions:
                 break
-            _, job_id, entitlement = min(victim_actions, key=lambda item: item[0])
+            action_key, job_id, entitlement = min(victim_actions, key=lambda item: item[0])
+            selected_action_keys.append(action_key)
             projected_job = projected_jobs[job_id]
             for gpu_id in projected_job.allocated_gpu_ids:
                 gpu = projected.gpu_by_id(gpu_id)
@@ -910,6 +913,7 @@ class Simulator:
         )
         return _ReclaimPlan(
             score=(
+                tuple(selected_action_keys),
                 sum(
                     self.running[job_id].checkpoint_cost + self.running[job_id].restart_cost
                     for job_id in preempted_ids

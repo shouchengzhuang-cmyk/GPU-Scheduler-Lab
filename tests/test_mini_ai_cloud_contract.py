@@ -53,6 +53,12 @@ def test_input_schema_freezes_typed_v2_and_vendor_kind_pairs() -> None:
         "allowed_vendors": {"contains": {"const": "huawei-ascend"}},
         "allowed_kinds": {"contains": {"const": "npu"}},
     }
+    naive_timestamp = {
+        "type": "string",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?$",
+    }
+    for name in ("arrival_time", "queued_at", "sla_deadline"):
+        assert task["properties"][name]["oneOf"][2] == naive_timestamp
     assert device["additionalProperties"] is True
     assert task["additionalProperties"] is True
 
