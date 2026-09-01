@@ -44,6 +44,15 @@ def test_input_schema_freezes_typed_v2_and_vendor_kind_pairs() -> None:
     }
     assert len(device["oneOf"]) == 2
     assert task["properties"]["selection_policy"]["const"] == "any"
+    compatible_pairs = task["allOf"][1]["anyOf"]
+    assert compatible_pairs[2]["properties"] == {
+        "allowed_vendors": {"contains": {"const": "nvidia"}},
+        "allowed_kinds": {"contains": {"const": "gpu"}},
+    }
+    assert compatible_pairs[3]["properties"] == {
+        "allowed_vendors": {"contains": {"const": "huawei-ascend"}},
+        "allowed_kinds": {"contains": {"const": "npu"}},
+    }
     assert device["additionalProperties"] is True
     assert task["additionalProperties"] is True
 
