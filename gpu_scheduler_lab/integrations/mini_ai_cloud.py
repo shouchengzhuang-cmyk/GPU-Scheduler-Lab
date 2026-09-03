@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -56,6 +57,13 @@ _TASK_V2_FIELDS = _TASK_COMMON_FIELDS | {
     "runtime_profile",
     "selection_policy",
 }
+_ISO_8601_TIMESTAMP = re.compile(
+    r"^(?:(?:(?:(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26]))|"
+    r"(?:(?:0[48]|[2468][048]|[13579][26])00))-02-29)|(?:(?!0000)[0-9]{4}-(?:(?:01|03|"
+    r"05|07|08|10|12)-(?:0[1-9]|[12][0-9]|3[01])|(?:04|06|09|11)-(?:0[1-9]|"
+    r"[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))))T(?:[01][0-9]|2[0-3]):[0-5][0-9]:"
+    r"[0-5][0-9](?:\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])?$"
+)
 
 
 def _mapping(value: object, path: str) -> Mapping[str, Any]:
@@ -105,6 +113,8 @@ def _timestamp(value: object, path: str) -> float | None:
     if isinstance(value, int | float):
         return _number(value, path)
     if isinstance(value, str):
+        if _ISO_8601_TIMESTAMP.fullmatch(value) is None:
+            raise ValueError(f"{path} must be a valid ISO-8601 timestamp")
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError as exc:

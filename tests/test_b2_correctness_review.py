@@ -22,7 +22,7 @@ from gpu_scheduler_lab.models import (
 from gpu_scheduler_lab.queues import QueueHierarchy, QueueSpec, ResourceVector
 from gpu_scheduler_lab.scenario import Scenario
 from gpu_scheduler_lab.schedulers import PreemptiveScheduler, create_scheduler
-from gpu_scheduler_lab.simulator.engine import Simulator
+from gpu_scheduler_lab.simulator.engine import Simulator, _plan_reclaim_action_key
 
 
 def _gpu(
@@ -328,6 +328,26 @@ def test_reclaim_keeps_victim_priority_ahead_of_vendor_disruption_cost() -> None
 
     assert simulated["nvidia-victim"].reclaim_victim_count == 0
     assert simulated["ascend-victim"].reclaim_victim_count == 1
+
+
+def test_reclaim_plan_keys_compare_elastic_and_victim_actions() -> None:
+    elastic = _plan_reclaim_action_key(
+        priority=int(Priority.NORMAL),
+        action_rank=0,
+        remaining_runtime=1.0,
+        disruption_cost=1.0,
+        job_id="elastic",
+        gpu_id="nvidia-0",
+    )
+    victim = _plan_reclaim_action_key(
+        priority=int(Priority.NORMAL),
+        action_rank=1,
+        remaining_runtime=1.0,
+        disruption_cost=1.0,
+        job_id="victim",
+    )
+
+    assert min((elastic, victim)) == elastic
 
 
 def test_priority_preemption_keeps_victim_priority_ahead_of_vendor_cost() -> None:

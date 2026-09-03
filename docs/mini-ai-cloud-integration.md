@@ -48,7 +48,7 @@ v2 在 v1 文件形状上增加类型化 accelerator 字段。为保持传输兼
 - 未知字段允许出现，以便生产者在同一版本内向前扩展；adapter 不解释其语义、不影响调度，只把未知字段名记录到 scenario metadata 或 Job `source_metadata`，未知值不会复制进结果。
 - CPU-only Task 在时间基线计算前过滤；因此它不会把 GPU workload 的逻辑起点提前。
 - 只有 health 精确为 `healthy`（缺省也是 `healthy`）的设备进入 inventory。
-- 数值时间直接视为 epoch/逻辑秒；带时区 ISO-8601 转为 UTC epoch；无时区 ISO-8601 明确按 UTC 解释。
+- 数值时间直接视为 epoch/逻辑秒；ISO-8601 时间必须采用 `YYYY-MM-DDTHH:MM:SS`（可带小数秒）并可选 `Z` 或 `±HH:MM` 时区；带时区值转为 UTC epoch，无时区值明确按 UTC 解释。
 - priority 固定映射为 0–24 low、25–74 normal、75–89 high、90–100 critical。
 
 v1/v2 各自拥有 golden、expected 和 breaking fixtures。v1 snapshot 冻结原始输出兼容；v2 snapshot 冻结 NVIDIA GPU 与华为昇腾 NPU 的显式类型，breaking fixture 证明 vendor-kind 错配会明确失败。
