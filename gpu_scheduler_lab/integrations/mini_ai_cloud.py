@@ -1,22 +1,37 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from gpu_scheduler_lab.models.accelerator import (
+    AcceleratorKind,
+    AcceleratorSelectionPolicy,
+    AcceleratorVendor,
+    vendor_supports_kind,
+)
 from gpu_scheduler_lab.models.cluster import GPU, Cluster, Node
 from gpu_scheduler_lab.models.job import Job, JobType, Priority
 from gpu_scheduler_lab.models.topology import TopologyMode
 from gpu_scheduler_lab.scenario import Scenario
 
-CONTRACT_VERSION = "mini-ai-cloud.gpu-scheduler-lab/v1"
+CONTRACT_V1_VERSION = "mini-ai-cloud.gpu-scheduler-lab/v1"
+CONTRACT_V2_VERSION = "mini-ai-cloud.gpu-scheduler-lab/v2"
+CONTRACT_VERSION = CONTRACT_V1_VERSION
 RESULT_CONTRACT_VERSION = "gpu-scheduler-lab.result/v1"
 
 _TOP_LEVEL_FIELDS = {"contract_version", "workers", "tasks", "exported_at", "producer"}
 _WORKER_FIELDS = {"id", "schedulable", "labels", "gpu_devices"}
-_DEVICE_FIELDS = {"device_uuid", "memory_total_mb", "health", "model"}
-_TASK_FIELDS = {
+_DEVICE_V1_FIELDS = {"device_uuid", "memory_total_mb", "health", "model"}
+_DEVICE_V2_FIELDS = _DEVICE_V1_FIELDS | {
+    "vendor",
+    "kind",
+    "runtime_profiles",
+    "capabilities",
+}
+_TASK_COMMON_FIELDS = {
     "id",
     "project_id",
     "arrival_time",
@@ -28,10 +43,27 @@ _TASK_FIELDS = {
     "priority",
     "workload_type",
     "sla_deadline",
-    "gpu_model",
-    "allowed_gpu_models",
     "labels",
 }
+_TASK_V1_FIELDS = _TASK_COMMON_FIELDS | {
+    "gpu_model",
+    "allowed_gpu_models",
+}
+_TASK_V2_FIELDS = _TASK_COMMON_FIELDS | {
+    "allowed_vendors",
+    "allowed_kinds",
+    "allowed_models",
+    "required_capabilities",
+    "runtime_profile",
+    "selection_policy",
+}
+_ISO_8601_TIMESTAMP = re.compile(
+    r"^(?:(?:(?:(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26]))|"
+    r"(?:(?:0[48]|[2468][048]|[13579][26])00))-02-29)|(?:(?!0000)[0-9]{4}-(?:(?:01|03|"
+    r"05|07|08|10|12)-(?:0[1-9]|[12][0-9]|3[01])|(?:04|06|09|11)-(?:0[1-9]|"
+    r"[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))))T(?:[01][0-9]|2[0-3]):[0-5][0-9]:"
+    r"[0-5][0-9](?:\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])?$"
+)
 
 
 def _mapping(value: object, path: str) -> Mapping[str, Any]:
@@ -73,7 +105,7 @@ def _number(value: object, path: str, *, positive: bool = False) -> float:
     return result
 
 
-def _timestamp(value: object, path: str) -> float | None:
+def _timestamp(value: object, path: str, *, strict_iso: bool = False) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -81,6 +113,8 @@ def _timestamp(value: object, path: str) -> float | None:
     if isinstance(value, int | float):
         return _number(value, path)
     if isinstance(value, str):
+        if strict_iso and _ISO_8601_TIMESTAMP.fullmatch(value) is None:
+            raise ValueError(f"{path} must be a valid ISO-8601 timestamp")
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError as exc:
@@ -105,15 +139,27 @@ def _unknown_names(value: Mapping[str, Any], known: set[str]) -> list[str]:
     return sorted(set(value) - known)
 
 
-def validate_mini_ai_cloud_export(payload: object) -> dict[str, Any]:
-    """Validate the v1 compatibility surface without producer dependencies.
+def _unique_strings(value: object, path: str) -> list[str]:
+    values = _list(value, path)
+    result = [_string(item, f"{path}[{index}]") for index, item in enumerate(values)]
+    if len(set(result)) != len(result):
+        raise ValueError(f"{path} must not contain duplicates")
+    return result
 
-    Unknown fields are accepted for v1 forward compatibility. Every field consumed
-    by the adapter is validated by this dependency-free runtime gate.
+
+def validate_mini_ai_cloud_export(payload: object) -> dict[str, Any]:
+    """Validate the v1/v2 compatibility surface without producer dependencies.
+
+    Unknown fields are accepted for forward compatibility and audited during import.
+    Every field consumed by the adapter is validated by this dependency-free runtime gate.
     """
     root = _mapping(payload, "export")
-    if root.get("contract_version") != CONTRACT_VERSION:
-        raise ValueError(f"contract_version must be {CONTRACT_VERSION}")
+    contract_version = root.get("contract_version")
+    if contract_version not in {CONTRACT_V1_VERSION, CONTRACT_V2_VERSION}:
+        raise ValueError(
+            f"contract_version must be one of {CONTRACT_V1_VERSION}, {CONTRACT_V2_VERSION}"
+        )
+    is_v2 = contract_version == CONTRACT_V2_VERSION
     workers = _list(root.get("workers"), "workers")
     tasks = _list(root.get("tasks"), "tasks")
     worker_ids: set[str] = set()
@@ -147,6 +193,14 @@ def validate_mini_ai_cloud_export(payload: object) -> dict[str, Any]:
                 _string(device["health"], f"{device_path}.health")
             if "model" in device:
                 _string(device["model"], f"{device_path}.model")
+            if is_v2:
+                vendor = AcceleratorVendor(_string(device.get("vendor"), f"{device_path}.vendor"))
+                kind = AcceleratorKind(_string(device.get("kind"), f"{device_path}.kind"))
+                if not vendor_supports_kind(vendor, kind):
+                    raise ValueError(f"{device_path}.vendor and kind must form a supported pair")
+                _string(device.get("model"), f"{device_path}.model")
+                _unique_strings(device.get("runtime_profiles"), f"{device_path}.runtime_profiles")
+                _unique_strings(device.get("capabilities"), f"{device_path}.capabilities")
 
     for task_index, task_value in enumerate(tasks):
         path = f"tasks[{task_index}]"
@@ -162,16 +216,59 @@ def validate_mini_ai_cloud_export(payload: object) -> dict[str, Any]:
             _integer(task["priority"], f"{path}.priority", maximum=100)
         for name in ("arrival_time", "queued_at", "sla_deadline"):
             if name in task:
-                _timestamp(task[name], f"{path}.{name}")
+                _timestamp(task[name], f"{path}.{name}", strict_iso=is_v2)
         duration_value = task.get("duration_seconds", task.get("timeout_seconds", 60.0))
         _number(duration_value, f"{path}.duration_seconds", positive=True)
-        if "gpu_model" in task:
-            _string(task["gpu_model"], f"{path}.gpu_model")
-        allowed_models = _list(task.get("allowed_gpu_models", []), f"{path}.allowed_gpu_models")
-        for model_index, model in enumerate(allowed_models):
-            _string(model, f"{path}.allowed_gpu_models[{model_index}]")
-        if task.get("gpu_model") is not None and allowed_models:
-            raise ValueError(f"{path}.gpu_model and allowed_gpu_models are mutually exclusive")
+        if not is_v2:
+            if "gpu_model" in task:
+                _string(task["gpu_model"], f"{path}.gpu_model")
+            legacy_allowed_models = _list(
+                task.get("allowed_gpu_models", []), f"{path}.allowed_gpu_models"
+            )
+            for model_index, model in enumerate(legacy_allowed_models):
+                _string(model, f"{path}.allowed_gpu_models[{model_index}]")
+            if task.get("gpu_model") is not None and legacy_allowed_models:
+                raise ValueError(f"{path}.gpu_model and allowed_gpu_models are mutually exclusive")
+        if is_v2:
+            allowed_vendors = _unique_strings(
+                task.get("allowed_vendors"), f"{path}.allowed_vendors"
+            )
+            allowed_kinds = _unique_strings(task.get("allowed_kinds"), f"{path}.allowed_kinds")
+            _unique_strings(task.get("allowed_models"), f"{path}.allowed_models")
+            _unique_strings(task.get("required_capabilities"), f"{path}.required_capabilities")
+            parsed_vendors: list[AcceleratorVendor] = []
+            for index, vendor_value in enumerate(allowed_vendors):
+                try:
+                    parsed_vendors.append(AcceleratorVendor(vendor_value))
+                except ValueError as exc:
+                    raise ValueError(f"{path}.allowed_vendors[{index}] is unsupported") from exc
+            parsed_kinds: list[AcceleratorKind] = []
+            for index, kind_value in enumerate(allowed_kinds):
+                try:
+                    parsed_kinds.append(AcceleratorKind(kind_value))
+                except ValueError as exc:
+                    raise ValueError(f"{path}.allowed_kinds[{index}] is unsupported") from exc
+            if (
+                parsed_vendors
+                and parsed_kinds
+                and not any(
+                    vendor_supports_kind(vendor, kind)
+                    for vendor in parsed_vendors
+                    for kind in parsed_kinds
+                )
+            ):
+                raise ValueError(
+                    f"{path}.allowed_vendors and allowed_kinds must include a supported pair"
+                )
+            runtime_profile = task.get("runtime_profile")
+            if runtime_profile is not None:
+                _string(runtime_profile, f"{path}.runtime_profile")
+            try:
+                AcceleratorSelectionPolicy(
+                    _string(task.get("selection_policy"), f"{path}.selection_policy")
+                )
+            except ValueError as exc:
+                raise ValueError(f"{path}.selection_policy is unsupported") from exc
         labels = _mapping(task.get("labels", {}), f"{path}.labels")
         for key, value in labels.items():
             _string(key, f"{path}.labels key")
@@ -212,6 +309,7 @@ def validate_result_handoff(payload: object) -> dict[str, Any]:
 def import_mini_ai_cloud_export(payload: dict[str, Any]) -> Scenario:
     """Convert a stable file export without importing Mini-AI-Cloud internals."""
     validated = validate_mini_ai_cloud_export(payload)
+    is_v2 = validated["contract_version"] == CONTRACT_V2_VERSION
     workers = validated["workers"]
     tasks = validated["tasks"]
     nodes: list[Node] = []
@@ -225,7 +323,8 @@ def import_mini_ai_cloud_export(payload: dict[str, Any]) -> Scenario:
         ignored_worker_fields.update(_unknown_names(worker, _WORKER_FIELDS))
         for index, device_value in enumerate(worker["gpu_devices"]):
             device = _mapping(device_value, "device")
-            ignored_device_fields.update(_unknown_names(device, _DEVICE_FIELDS))
+            device_fields = _DEVICE_V2_FIELDS if is_v2 else _DEVICE_V1_FIELDS
+            ignored_device_fields.update(_unknown_names(device, device_fields))
             if str(device.get("health", "healthy")) != "healthy":
                 unhealthy_devices_filtered += 1
                 continue
@@ -235,6 +334,19 @@ def import_mini_ai_cloud_export(payload: dict[str, Any]) -> Scenario:
                     node_id=worker_id,
                     memory_capacity_gb=int(device["memory_total_mb"]) / 1024.0,
                     model=str(device.get("model", "generic")),
+                    vendor=AcceleratorVendor(
+                        str(device["vendor"]) if is_v2 else AcceleratorVendor.UNKNOWN.value
+                    ),
+                    kind=AcceleratorKind(
+                        str(device["kind"]) if is_v2 else AcceleratorKind.GPU.value
+                    ),
+                    runtime_profiles=(
+                        tuple(str(value) for value in device["runtime_profiles"]) if is_v2 else ()
+                    ),
+                    capabilities=(
+                        tuple(str(value) for value in device["capabilities"]) if is_v2 else ()
+                    ),
+                    accelerator_metadata_inferred=not is_v2,
                 )
             )
         nodes.append(
@@ -247,27 +359,37 @@ def import_mini_ai_cloud_export(payload: dict[str, Any]) -> Scenario:
         )
 
     raw_tasks = [task for task in tasks if int(_mapping(task, "task")["gpu_count"]) > 0]
+    task_fields = _TASK_V2_FIELDS if is_v2 else _TASK_V1_FIELDS
+    ignored_task_fields = {
+        name
+        for task_value in tasks
+        for name in _unknown_names(_mapping(task_value, "task"), task_fields)
+    }
     absolute_arrivals: list[float] = []
     for index, task_value in enumerate(raw_tasks):
         task = _mapping(task_value, "task")
         value = _timestamp(
-            task.get("arrival_time", task.get("queued_at")), f"tasks[{index}].arrival_time"
+            task.get("arrival_time", task.get("queued_at")),
+            f"tasks[{index}].arrival_time",
+            strict_iso=is_v2,
         )
         if value is not None:
             absolute_arrivals.append(value)
     baseline = min(absolute_arrivals, default=0.0)
     jobs: list[Job] = []
-    ignored_task_fields: set[str] = set()
     for index, task_value in enumerate(raw_tasks):
         task = _mapping(task_value, "task")
-        ignored = _unknown_names(task, _TASK_FIELDS)
-        ignored_task_fields.update(ignored)
+        ignored = _unknown_names(task, task_fields)
         arrival_value = _timestamp(
-            task.get("arrival_time", task.get("queued_at")), f"tasks[{index}].arrival_time"
+            task.get("arrival_time", task.get("queued_at")),
+            f"tasks[{index}].arrival_time",
+            strict_iso=is_v2,
         )
         arrival = max(0.0, (baseline if arrival_value is None else arrival_value) - baseline)
         labels = _mapping(task.get("labels", {}), f"tasks[{index}].labels")
-        deadline_value = _timestamp(task.get("sla_deadline"), f"tasks[{index}].sla_deadline")
+        deadline_value = _timestamp(
+            task.get("sla_deadline"), f"tasks[{index}].sla_deadline", strict_iso=is_v2
+        )
         workload = str(task.get("workload_type", "batch_job"))
         gpu_count = int(task["gpu_count"])
         source_metadata = {"mini_ai_cloud_unknown_fields_ignored": ignored} if ignored else {}
@@ -289,10 +411,43 @@ def import_mini_ai_cloud_export(payload: dict[str, Any]) -> Scenario:
                     None if deadline_value is None else max(0.0, deadline_value - baseline)
                 ),
                 group=str(task.get("project_id", workload)),
-                gpu_model=(str(task["gpu_model"]) if task.get("gpu_model") is not None else None),
-                allowed_gpu_models=tuple(
-                    str(value) for value in task.get("allowed_gpu_models", [])
+                gpu_model=(
+                    str(task["gpu_model"])
+                    if not is_v2 and task.get("gpu_model") is not None
+                    else None
                 ),
+                allowed_gpu_models=(
+                    tuple(str(value) for value in task.get("allowed_gpu_models", []))
+                    if not is_v2
+                    else ()
+                ),
+                allowed_vendors=(
+                    tuple(AcceleratorVendor(str(value)) for value in task["allowed_vendors"])
+                    if is_v2
+                    else ()
+                ),
+                allowed_kinds=(
+                    tuple(AcceleratorKind(str(value)) for value in task["allowed_kinds"])
+                    if is_v2
+                    else ()
+                ),
+                allowed_models=(
+                    tuple(str(value) for value in task["allowed_models"]) if is_v2 else ()
+                ),
+                required_capabilities=(
+                    tuple(str(value) for value in task["required_capabilities"]) if is_v2 else ()
+                ),
+                runtime_profile=(
+                    str(task["runtime_profile"])
+                    if is_v2 and task["runtime_profile"] is not None
+                    else None
+                ),
+                selection_policy=(
+                    AcceleratorSelectionPolicy(str(task["selection_policy"]))
+                    if is_v2
+                    else AcceleratorSelectionPolicy.ANY
+                ),
+                accelerator_request_explicit=is_v2,
                 topology_mode=TopologyMode(str(labels.get("gpu_scheduler_lab/topology", "none"))),
                 source_metadata=source_metadata,
             )
@@ -304,11 +459,15 @@ def import_mini_ai_cloud_export(payload: dict[str, Any]) -> Scenario:
             "source": "Mini-AI-Cloud",
             "contract_version": validated["contract_version"],
             "cpu_only_tasks_filtered": len(tasks) - len(raw_tasks),
-            "unhealthy_gpu_devices_filtered": unhealthy_devices_filtered,
+            (
+                "unhealthy_accelerator_devices_filtered"
+                if is_v2
+                else "unhealthy_gpu_devices_filtered"
+            ): unhealthy_devices_filtered,
             "unknown_fields_ignored": {
                 "export": _unknown_names(validated, _TOP_LEVEL_FIELDS),
                 "worker": sorted(ignored_worker_fields),
-                "gpu_device": sorted(ignored_device_fields),
+                ("accelerator_device" if is_v2 else "gpu_device"): sorted(ignored_device_fields),
                 "task": sorted(ignored_task_fields),
             },
         },

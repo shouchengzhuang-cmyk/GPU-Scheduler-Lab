@@ -98,6 +98,16 @@ def scenario_to_dict(scenario: Scenario) -> dict[str, Any]:
                         "id": gpu.id,
                         "model": gpu.model,
                         "memory_gb": gpu.memory_capacity_gb,
+                        **(
+                            {
+                                "vendor": gpu.vendor.value,
+                                "kind": gpu.kind.value,
+                                "runtime_profiles": list(gpu.runtime_profiles),
+                                "capabilities": list(gpu.capabilities),
+                            }
+                            if not gpu.accelerator_metadata_inferred
+                            else {}
+                        ),
                     }
                     for gpu in node.gpus
                 ],
@@ -120,6 +130,18 @@ def scenario_to_dict(scenario: Scenario) -> dict[str, Any]:
                 **(
                     {"allowed_gpu_models": list(job.allowed_gpu_models)}
                     if job.allowed_gpu_models
+                    else {}
+                ),
+                **(
+                    {
+                        "allowed_vendors": [value.value for value in job.allowed_vendors],
+                        "allowed_kinds": [value.value for value in job.allowed_kinds],
+                        "allowed_models": list(job.allowed_models),
+                        "required_capabilities": list(job.required_capabilities),
+                        "runtime_profile": job.runtime_profile,
+                        "selection_policy": job.selection_policy.value,
+                    }
+                    if job.accelerator_request_explicit
                     else {}
                 ),
                 **(

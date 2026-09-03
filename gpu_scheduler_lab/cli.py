@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from gpu_scheduler_lab.experiments import run_experiment
+from gpu_scheduler_lab.heterogeneous import run_heterogeneous_study
 from gpu_scheduler_lab.integrations.mini_ai_cloud import (
     RESULT_CONTRACT_VERSION,
     import_mini_ai_cloud_export,
@@ -35,7 +36,11 @@ SCHEDULERS = (
     "fairshare-no-borrow",
     "fairshare-borrow",
     "fairshare-reclaim",
+    "prefer-nvidia",
+    "prefer-ascend",
 )
+
+DEFAULT_COMPARE_SCHEDULERS = SCHEDULERS[:-2]
 
 
 def _weighted_ints(value: str) -> tuple[tuple[int, float], ...]:
@@ -234,6 +239,11 @@ def _experiment(args: argparse.Namespace) -> None:
     )
 
 
+def _heterogeneous_study(args: argparse.Namespace) -> None:
+    artifacts = run_heterogeneous_study(args.config)
+    print(f"Manifest: {artifacts.manifest}\nRuns: {artifacts.runs}\nReport: {artifacts.report}")
+
+
 def _study_validate(args: argparse.Namespace) -> None:
     config = StudyConfig.load(args.config)
     if args.policy is not None:
@@ -287,7 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     compare = subparsers.add_parser("compare", help="compare schedulers on one workload")
     compare.add_argument("--scenario", type=Path, required=True)
-    compare.add_argument("--schedulers", default=",".join(SCHEDULERS))
+    compare.add_argument("--schedulers", default=",".join(DEFAULT_COMPARE_SCHEDULERS))
     _add_output_args(compare)
     compare.set_defaults(handler=_compare)
 
@@ -331,7 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate.set_defaults(handler=_generate)
 
     importer = subparsers.add_parser(
-        "import-mini-ai-cloud", help="convert a Mini-AI-Cloud v1 file export"
+        "import-mini-ai-cloud", help="convert a Mini-AI-Cloud v1 or v2 file export"
     )
     importer.add_argument("--input", type=Path, required=True)
     importer.add_argument("--output", type=Path, required=True)
@@ -360,6 +370,13 @@ def build_parser() -> argparse.ArgumentParser:
     experiment = subparsers.add_parser("experiment", help="run a reproducible experiment")
     experiment.add_argument("--config", type=Path, required=True)
     experiment.set_defaults(handler=_experiment)
+
+    heterogeneous = subparsers.add_parser(
+        "heterogeneous-study",
+        help="run NVIDIA and Huawei Ascend correctness or calibrated studies",
+    )
+    heterogeneous.add_argument("--config", type=Path, required=True)
+    heterogeneous.set_defaults(handler=_heterogeneous_study)
 
     study = subparsers.add_parser("study", help="validate or run the canonical study")
     study_commands = study.add_subparsers(dest="study_command", required=True)

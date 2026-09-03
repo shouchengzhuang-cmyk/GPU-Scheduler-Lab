@@ -1,4 +1,6 @@
 from gpu_scheduler_lab.integrations.mini_ai_cloud import (
+    CONTRACT_V1_VERSION,
+    CONTRACT_V2_VERSION,
     CONTRACT_VERSION,
     RESULT_CONTRACT_VERSION,
     import_mini_ai_cloud_export,
@@ -7,6 +9,8 @@ from gpu_scheduler_lab.integrations.mini_ai_cloud import (
 )
 
 __all__ = [
+    "CONTRACT_V1_VERSION",
+    "CONTRACT_V2_VERSION",
     "CONTRACT_VERSION",
     "RESULT_CONTRACT_VERSION",
     "import_mini_ai_cloud_export",

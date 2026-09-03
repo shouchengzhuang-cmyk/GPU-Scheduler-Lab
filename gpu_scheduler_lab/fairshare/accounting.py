@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from gpu_scheduler_lab.models.accelerator import AcceleratorVendor
 from gpu_scheduler_lab.models.cluster import GPU, Cluster
 from gpu_scheduler_lab.models.job import Job
 from gpu_scheduler_lab.queues.model import ResourceVector
@@ -51,12 +52,18 @@ class AccountingPolicy:
         gpus: Iterable[GPU],
         replicas: int,
     ) -> ResourceVector:
-        weights = sorted(
-            self.model_weights.get(gpu.model, 1.0) for gpu in gpus if gpu.is_compatible(job)
-        )
-        if len(weights) < replicas:
+        compatible = [gpu for gpu in gpus if gpu.is_compatible(job)]
+        by_vendor: dict[AcceleratorVendor, list[GPU]] = {}
+        for gpu in compatible:
+            by_vendor.setdefault(gpu.vendor, []).append(gpu)
+        viable_groups = [group for group in by_vendor.values() if len(group) >= replicas]
+        if not viable_groups:
             raise ValueError("insufficient compatible GPUs for accounting demand")
-        return ResourceVector(sum(weights[:replicas]), replicas * job.gpu_memory_gb)
+        minimum_units = min(
+            sum(sorted(self.model_weights.get(gpu.model, 1.0) for gpu in group)[:replicas])
+            for group in viable_groups
+        )
+        return ResourceVector(minimum_units, replicas * job.gpu_memory_gb)
 
     def capacity(self, cluster: Cluster) -> ResourceVector:
         return ResourceVector(

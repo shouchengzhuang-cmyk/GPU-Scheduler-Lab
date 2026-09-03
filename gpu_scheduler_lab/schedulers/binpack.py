@@ -10,9 +10,9 @@ class BinPackScheduler(Scheduler):
     name = "binpack"
 
     @staticmethod
-    def _eligible(node: Node, job: Job) -> list[GPU]:
+    def _eligible(node: Node, job: Job, eligible_ids: set[str]) -> list[GPU]:
         return sorted(
-            (gpu for gpu in node.gpus if gpu.can_host(job)),
+            (gpu for gpu in node.gpus if gpu.id in eligible_ids),
             key=lambda gpu: (gpu.memory_capacity_gb - job.gpu_memory_gb, gpu.id),
         )
 
@@ -24,7 +24,10 @@ class BinPackScheduler(Scheduler):
             from gpu_scheduler_lab.schedulers.topology import TopologyAwareScheduler
 
             return TopologyAwareScheduler().place(cluster, job)
-        candidates = [(node, self._eligible(node, job)) for node in cluster.schedulable_nodes]
+        eligible_ids = {gpu.id for gpu in cluster.eligible_gpus(job)}
+        candidates = [
+            (node, self._eligible(node, job, eligible_ids)) for node in cluster.schedulable_nodes
+        ]
         if sum(len(gpus) for _, gpus in candidates) < job.requested_gpu_count:
             return None
 
