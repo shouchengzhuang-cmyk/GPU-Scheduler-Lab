@@ -22,7 +22,11 @@ from gpu_scheduler_lab.models import (
 from gpu_scheduler_lab.queues import QueueHierarchy, QueueSpec, ResourceVector
 from gpu_scheduler_lab.scenario import Scenario
 from gpu_scheduler_lab.schedulers import PreemptiveScheduler, create_scheduler
-from gpu_scheduler_lab.simulator.engine import Simulator
+from gpu_scheduler_lab.simulator.engine import (
+    Simulator,
+    _discard_plan_action_keys,
+    _plan_reclaim_action_key,
+)
 
 
 def _gpu(
@@ -259,6 +263,98 @@ def test_priority_preemption_does_not_evict_from_an_infeasible_vendor() -> None:
     assert simulated["incoming"].first_start_time == 1
     assert simulated["nvidia-victim"].preemption_count == 1
     assert simulated["ascend-victim"].preemption_count == 0
+
+
+def test_reclaim_keeps_victim_priority_ahead_of_vendor_disruption_cost() -> None:
+    cluster = Cluster(
+        [
+            Node(
+                "nvidia",
+                [
+                    _gpu(
+                        "nvidia-0",
+                        "nvidia",
+                        AcceleratorVendor.NVIDIA,
+                        AcceleratorKind.GPU,
+                    )
+                ],
+            ),
+            Node(
+                "ascend",
+                [
+                    _gpu(
+                        "ascend-0",
+                        "ascend",
+                        AcceleratorVendor.HUAWEI_ASCEND,
+                        AcceleratorKind.NPU,
+                    )
+                ],
+            ),
+        ]
+    )
+    scenario = Scenario(
+        cluster,
+        [
+            _job(
+                id="nvidia-victim",
+                gpu_count=1,
+                allowed_vendors=(AcceleratorVendor.NVIDIA,),
+                allowed_kinds=(AcceleratorKind.GPU,),
+                priority=Priority.NORMAL,
+                queue_id="borrower",
+            ),
+            _job(
+                id="ascend-victim",
+                gpu_count=1,
+                allowed_vendors=(AcceleratorVendor.HUAWEI_ASCEND,),
+                allowed_kinds=(AcceleratorKind.NPU,),
+                priority=Priority.LOW,
+                checkpoint_cost=1,
+                queue_id="borrower",
+            ),
+            _job(id="incoming", arrival_time=1, gpu_count=1, queue_id="product"),
+        ],
+        queues=(
+            QueueSpec("borrower", "root", limit=ResourceVector(2, 128)),
+            QueueSpec(
+                "product",
+                "root",
+                guaranteed=ResourceVector(1, 64),
+                limit=ResourceVector(1, 64),
+            ),
+        ),
+    )
+
+    result = Simulator.from_scenario(
+        scenario, create_scheduler("fairshare-reclaim", scenario)
+    ).run()
+    simulated = {job.id: job for job in result.jobs}
+
+    assert simulated["nvidia-victim"].reclaim_victim_count == 0
+    assert simulated["ascend-victim"].reclaim_victim_count == 1
+
+
+def test_reclaim_plan_keys_compare_elastic_and_victim_actions() -> None:
+    elastic = _plan_reclaim_action_key(
+        priority=int(Priority.NORMAL),
+        action_rank=0,
+        remaining_runtime=1.0,
+        disruption_cost=1.0,
+        job_id="elastic",
+        gpu_id="nvidia-0",
+    )
+    victim = _plan_reclaim_action_key(
+        priority=int(Priority.NORMAL),
+        action_rank=1,
+        remaining_runtime=1.0,
+        disruption_cost=1.0,
+        job_id="victim",
+    )
+
+    assert min((elastic, victim)) == elastic
+
+    promoted = _discard_plan_action_keys([("elastic", elastic), ("victim", victim)], "elastic")
+    assert promoted == [("victim", victim)]
 
 
 def test_priority_preemption_keeps_victim_priority_ahead_of_vendor_cost() -> None:
