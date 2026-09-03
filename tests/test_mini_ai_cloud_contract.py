@@ -26,6 +26,13 @@ def _v2_golden() -> dict[str, Any]:
     )
 
 
+def _v1_golden() -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        json.loads(Path("tests/fixtures/mini_ai_cloud/v1-golden.json").read_text(encoding="utf-8")),
+    )
+
+
 def test_input_schema_freezes_v1_and_allows_forward_compatible_fields() -> None:
     schema = _schema("mini-ai-cloud-v1.schema.json")
 
@@ -108,6 +115,13 @@ def test_v2_timestamp_schema_and_adapter_reject_unsupported_iso_values(timestamp
     assert re.fullmatch(pattern, timestamp) is None
     with pytest.raises(ValueError, match="valid ISO-8601 timestamp"):
         import_mini_ai_cloud_export(payload)
+
+
+def test_v1_timestamp_adapter_keeps_its_existing_iso_acceptance_boundary() -> None:
+    payload = _v1_golden()
+    payload["tasks"][1]["queued_at"] = "2026-08-25t00:00:00+00:00"
+
+    import_mini_ai_cloud_export(payload)
 
 
 def test_result_schema_requires_simulated_evidence_kind() -> None:

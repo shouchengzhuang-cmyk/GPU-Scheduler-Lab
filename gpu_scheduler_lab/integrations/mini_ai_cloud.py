@@ -105,7 +105,7 @@ def _number(value: object, path: str, *, positive: bool = False) -> float:
     return result
 
 
-def _timestamp(value: object, path: str) -> float | None:
+def _timestamp(value: object, path: str, *, strict_iso: bool = False) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -113,7 +113,7 @@ def _timestamp(value: object, path: str) -> float | None:
     if isinstance(value, int | float):
         return _number(value, path)
     if isinstance(value, str):
-        if _ISO_8601_TIMESTAMP.fullmatch(value) is None:
+        if strict_iso and _ISO_8601_TIMESTAMP.fullmatch(value) is None:
             raise ValueError(f"{path} must be a valid ISO-8601 timestamp")
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -216,7 +216,7 @@ def validate_mini_ai_cloud_export(payload: object) -> dict[str, Any]:
             _integer(task["priority"], f"{path}.priority", maximum=100)
         for name in ("arrival_time", "queued_at", "sla_deadline"):
             if name in task:
-                _timestamp(task[name], f"{path}.{name}")
+                _timestamp(task[name], f"{path}.{name}", strict_iso=is_v2)
         duration_value = task.get("duration_seconds", task.get("timeout_seconds", 60.0))
         _number(duration_value, f"{path}.duration_seconds", positive=True)
         if not is_v2:
@@ -369,7 +369,9 @@ def import_mini_ai_cloud_export(payload: dict[str, Any]) -> Scenario:
     for index, task_value in enumerate(raw_tasks):
         task = _mapping(task_value, "task")
         value = _timestamp(
-            task.get("arrival_time", task.get("queued_at")), f"tasks[{index}].arrival_time"
+            task.get("arrival_time", task.get("queued_at")),
+            f"tasks[{index}].arrival_time",
+            strict_iso=is_v2,
         )
         if value is not None:
             absolute_arrivals.append(value)
@@ -379,11 +381,15 @@ def import_mini_ai_cloud_export(payload: dict[str, Any]) -> Scenario:
         task = _mapping(task_value, "task")
         ignored = _unknown_names(task, task_fields)
         arrival_value = _timestamp(
-            task.get("arrival_time", task.get("queued_at")), f"tasks[{index}].arrival_time"
+            task.get("arrival_time", task.get("queued_at")),
+            f"tasks[{index}].arrival_time",
+            strict_iso=is_v2,
         )
         arrival = max(0.0, (baseline if arrival_value is None else arrival_value) - baseline)
         labels = _mapping(task.get("labels", {}), f"tasks[{index}].labels")
-        deadline_value = _timestamp(task.get("sla_deadline"), f"tasks[{index}].sla_deadline")
+        deadline_value = _timestamp(
+            task.get("sla_deadline"), f"tasks[{index}].sla_deadline", strict_iso=is_v2
+        )
         workload = str(task.get("workload_type", "batch_job"))
         gpu_count = int(task["gpu_count"])
         source_metadata = {"mini_ai_cloud_unknown_fields_ignored": ignored} if ignored else {}

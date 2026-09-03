@@ -22,7 +22,11 @@ from gpu_scheduler_lab.models import (
 from gpu_scheduler_lab.queues import QueueHierarchy, QueueSpec, ResourceVector
 from gpu_scheduler_lab.scenario import Scenario
 from gpu_scheduler_lab.schedulers import PreemptiveScheduler, create_scheduler
-from gpu_scheduler_lab.simulator.engine import Simulator, _plan_reclaim_action_key
+from gpu_scheduler_lab.simulator.engine import (
+    Simulator,
+    _discard_plan_action_keys,
+    _plan_reclaim_action_key,
+)
 
 
 def _gpu(
@@ -348,6 +352,9 @@ def test_reclaim_plan_keys_compare_elastic_and_victim_actions() -> None:
     )
 
     assert min((elastic, victim)) == elastic
+
+    promoted = _discard_plan_action_keys([("elastic", elastic), ("victim", victim)], "elastic")
+    assert promoted == [("victim", victim)]
 
 
 def test_priority_preemption_keeps_victim_priority_ahead_of_vendor_cost() -> None:
