@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-03
+
+### Added
+
+- Typed Mini AI Cloud v2 accelerator exchange: explicit NVIDIA GPU and Huawei Ascend NPU constraints, runtime profiles and capabilities.
+- Heterogeneous topology/outage simulation coverage, priority-safe cross-vendor reclaim, and contract timestamp regressions.
+- Optional bounded parallel study execution with deterministic aggregation and resumable parallel outcomes.
+
+### Changed
+
+- Parallel study work is transplanted from the reviewed #15 series onto the current main baseline; the default remains serial.
+- v2 timestamp schema and adapter accept documented UTC-naive values while v1 keeps its frozen compatibility boundary.
+
+### Security
+
+- Typed accelerator exchange remains offline and `SIMULATED`; no real GPU, Kubernetes, production scheduler, or deployment claim is introduced.
+
 ## [0.3.0] - 2026-08-26
 
 ### Added

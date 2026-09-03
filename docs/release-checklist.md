@@ -1,12 +1,12 @@
-# GPU Scheduler Lab 0.3.0 release checklist
+# GPU Scheduler Lab 0.4.0 release checklist
 
-本清单只准备 `0.3.0` release candidate。完成勾选不自动授权 tag、GitHub Release 或部署。
+本清单只准备 `0.4.0` release candidate。完成勾选不自动授权 tag、GitHub Release 或部署。
 
 ## Identity and contracts
 
-- [ ] `pyproject.toml`、`gpu_scheduler_lab.__version__`、README 和 wheel metadata 都是 `0.3.0`。
-- [ ] Mini AI Cloud 输入 v1 与 result handoff v1 schema 可解析。
-- [ ] v1 golden fixture 完整导入，breaking fixture 明确失败。
+- [ ] `pyproject.toml`、`gpu_scheduler_lab.__version__`、README 和 wheel metadata 都是 `0.4.0`。
+- [ ] Mini AI Cloud 输入 v1/v2 与 result handoff v1 schema 可解析。
+- [ ] v1/v2 golden fixture 完整导入，breaking fixture 明确失败。
 - [ ] 输出 JSON 固定标记 `evidence_kind: SIMULATED`。
 - [ ] CHANGELOG 只记录当前 Git 历史和生成产物可证实的事实。
 
