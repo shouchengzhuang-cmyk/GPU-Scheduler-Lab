@@ -142,10 +142,13 @@ Sensitivity 与单机制 ablation runner 使用同一份合同：
 
 ```bash
 .venv/bin/python -m gpu_scheduler_lab study run --config study/study.yaml
+.venv/bin/python -m gpu_scheduler_lab study run --config study/study.yaml --workers 4
 ```
 
 runner 支持 one-at-a-time 或 Cartesian 参数网格、多 seed、warm-up、replication、
-有界 retry 和基于稳定 run ID 的部分结果恢复。每个 run 写入独立
+有界 retry 和基于稳定 run ID 的部分结果恢复。`--workers` 默认为 `1`，保持串行
+兼容；大于 `1` 时使用有界多进程执行相互独立的 run，父进程仍是唯一产物写入者和
+稳定排序汇总者。每个 run 写入独立
 `runs/<run-id>/manifest.json` 与 `result.json`，汇总保留 `samples`、`mean`、
 `stddev`；这些统计只描述当前 simulator/config，不自动构成显著性或生产性能结论。
 `study/study-small.yaml` 是 CI orchestration fixture，不用于研究结论。
@@ -154,6 +157,7 @@ runner 支持 one-at-a-time 或 Cartesian 参数网格、多 seed、warm-up、re
 
 ```bash
 make reproduce-study
+make reproduce-study STUDY_WORKERS=4
 ```
 
 该命令运行正式配置并在 `build/study/canonical/` 生成 `manifest.json`、

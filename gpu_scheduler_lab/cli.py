@@ -84,6 +84,16 @@ def _gpu_memory_mapping(value: str) -> tuple[str, float]:
     return model, memory
 
 
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("value must be an integer >= 1") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be an integer >= 1")
+    return parsed
+
+
 def _run(scenario: Scenario, scheduler_name: str) -> SimulationResult:
     return Simulator.from_scenario(scenario, create_scheduler(scheduler_name, scenario)).run()
 
@@ -256,7 +266,7 @@ def _study_validate(args: argparse.Namespace) -> None:
 
 
 def _study_run(args: argparse.Namespace) -> None:
-    artifacts = run_study(args.config)
+    artifacts = run_study(args.config, workers=args.workers)
     print(
         f"Study manifest: {artifacts.manifest}\n"
         f"Summary JSON: {artifacts.summary_json}\n"
@@ -389,6 +399,12 @@ def build_parser() -> argparse.ArgumentParser:
     study_validate.set_defaults(handler=_study_validate)
     study_run = study_commands.add_parser("run", help="run sensitivity and ablation plans")
     study_run.add_argument("--config", type=Path, required=True)
+    study_run.add_argument(
+        "--workers",
+        type=_positive_int,
+        default=1,
+        help="bounded worker process count (default: 1 for serial compatibility)",
+    )
     study_run.set_defaults(handler=_study_run)
     study_report = study_commands.add_parser(
         "report", help="generate audited tables, figures, report, and hashes"

@@ -11,6 +11,8 @@ def test_release_prepare_budget_covers_the_full_canonical_study() -> None:
     _publish, notification = remainder.split("\n  notify-prepare-failure:", maxsplit=1)
 
     assert "timeout-minutes: 120" in prepare
+    assert "min(4, os.cpu_count() or 1)" in prepare
+    assert 'make reproduce-study STUDY_WORKERS="${study_workers}"' in prepare
     assert "needs.prepare.result == 'failure'" in notification
     assert "needs.prepare.result == 'cancelled'" in notification
     assert "PREPARE_RESULT: ${{ needs.prepare.result }}" in notification
