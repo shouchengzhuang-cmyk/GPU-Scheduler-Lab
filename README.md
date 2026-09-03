@@ -4,7 +4,7 @@ GPU Scheduler Lab 是一个可复现、可测试、可 benchmark 的 GPU 集群�
 
 它是调度算法实验室，不连接真实 NVIDIA GPU、CUDA 或 Kubernetes，也不是生产调度器。
 
-Python distribution 与主 CLI 均使用 `gpu-scheduler-lab`，当前 release 准备版本为 `0.3.0`；`python -m gpu_scheduler_lab` 是等价模块入口。仓库只准备 release commit，不自动创建 tag 或 GitHub Release。
+Python distribution 与主 CLI 均使用 `gpu-scheduler-lab`，当前 release 准备版本为 `0.4.0`；`python -m gpu_scheduler_lab` 是等价模块入口。仓库只准备 release commit，不自动创建 tag 或 GitHub Release。
 
 ## Research question
 

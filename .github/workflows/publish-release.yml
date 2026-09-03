@@ -26,7 +26,7 @@ jobs:
       target_sha: ${{ steps.approval.outputs.target_sha }}
       tag: ${{ steps.approval.outputs.tag }}
     env:
-      RELEASE_VERSION: 0.3.0
+      RELEASE_VERSION: 0.4.0
     steps:
       - name: Parse explicit owner authorization
         id: approval
@@ -105,7 +105,7 @@ jobs:
           import re
           from pathlib import Path
 
-          assert importlib.metadata.version("gpu-scheduler-lab") == "0.3.0"
+          assert importlib.metadata.version("gpu-scheduler-lab") == "0.4.0"
           failures = []
           pattern = re.compile(r"^\s*-?\s*uses:\s*([^\s@]+)@([^\s#]+)")
           for workflow in sorted(Path(".github/workflows").glob("*.yml")):
@@ -160,8 +160,8 @@ jobs:
           import importlib.metadata
           import gpu_scheduler_lab
 
-          assert importlib.metadata.version("gpu-scheduler-lab") == "0.3.0"
-          assert gpu_scheduler_lab.__version__ == "0.3.0"
+          assert importlib.metadata.version("gpu-scheduler-lab") == "0.4.0"
+          assert gpu_scheduler_lab.__version__ == "0.4.0"
           PY
 
       - name: Prepare deterministic study and release assets
@@ -258,7 +258,7 @@ jobs:
           rm -rf "${transfer_dir}"
           mkdir -p "${transfer_dir}/dist" "${transfer_dir}/build/study"
           cp dist/*.whl "${transfer_dir}/dist/"
-          cp build/gpu-scheduler-lab-v0.3.0-study.tar.gz \
+          cp build/gpu-scheduler-lab-v0.4.0-study.tar.gz \
             build/release-assets.sha256 \
             build/final-release-notes.md \
             "${transfer_dir}/build/"
@@ -281,7 +281,7 @@ jobs:
       contents: write
       issues: write
     env:
-      RELEASE_VERSION: 0.3.0
+      RELEASE_VERSION: 0.4.0
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Record publication start
@@ -674,7 +674,7 @@ jobs:
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_VERSION: 0.3.0
+      RELEASE_VERSION: 0.4.0
       PREPARE_RESULT: ${{ needs.prepare.result }}
     steps:
       - name: Record preparation non-success
