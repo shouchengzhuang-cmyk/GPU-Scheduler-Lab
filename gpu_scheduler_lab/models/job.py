@@ -203,15 +203,16 @@ class Job:
 
     @property
     def waiting_time(self) -> float | None:
-        if self.completion_time is None:
+        """Return submission-to-first-start queue delay for completed jobs.
+
+        Waiting time is intentionally independent of elasticity, preemption,
+        checkpointing, restart cost, and later suspension. Those effects belong
+        to turnaround and explicit overhead metrics, so one aggregate never mixes
+        different latency definitions across job classes.
+        """
+        if self.completion_time is None or self.first_start_time is None:
             return None
-        if self.elastic is not None:
-            return (
-                max(0.0, self.first_start_time - self.arrival_time)
-                if self.first_start_time is not None
-                else None
-            )
-        return max(0.0, self.completion_time - self.arrival_time - self.duration)
+        return max(0.0, self.first_start_time - self.arrival_time)
 
     @property
     def turnaround_time(self) -> float | None:
