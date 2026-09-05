@@ -3,8 +3,9 @@ from __future__ import annotations
 import pytest
 from conftest import make_cluster
 
+from gpu_scheduler_lab.elastic import ElasticSpec
 from gpu_scheduler_lab.metrics import fragmentation_snapshot, jains_fairness_index
-from gpu_scheduler_lab.models import Job
+from gpu_scheduler_lab.models import Job, JobStatus
 
 
 def test_count_fragmentation_bounds_and_meaning() -> None:
@@ -56,3 +57,23 @@ def test_jains_fairness_index() -> None:
     assert jains_fairness_index([1, 1, 1]) == 1.0
     assert jains_fairness_index([1, 0]) == 0.5
     assert jains_fairness_index([]) == 1.0
+
+
+def test_waiting_time_is_submission_to_first_start_for_fixed_and_elastic_jobs() -> None:
+    fixed = Job("fixed", 1, 10, 1, 20)
+    elastic = Job(
+        "elastic",
+        1,
+        10,
+        2,
+        20,
+        elastic=ElasticSpec(min_replicas=1, preferred_replicas=2, max_replicas=4),
+    )
+
+    for job, completion_time in ((fixed, 18.0), (elastic, 30.0)):
+        job.first_start_time = 4.0
+        job.completion_time = completion_time
+        job.status = JobStatus.COMPLETED
+
+    assert fixed.waiting_time == pytest.approx(3.0)
+    assert elastic.waiting_time == pytest.approx(3.0)
