@@ -7,7 +7,7 @@ production scheduler, GPU kernel, network, or storage system.
 | ID | Source key | Definition | Direction |
 |---|---|---|---|
 | `average-gpu-utilization` | `average_gpu_utilization` | Busy GPU capacity time divided by schedulable GPU capacity time. | maximize |
-| `p95-wait` | `p95_waiting_time` | 95th percentile completed-job waiting time. | minimize |
+| `p95-wait` | `p95_waiting_time` | 95th percentile of completed-job queue delay, defined uniformly as first start time minus arrival time for fixed and elastic jobs. | minimize |
 | `completion-rate` | `completion_rate` | Completed jobs divided by submitted jobs at the horizon. | maximize |
 | `gpu-count-fragmentation` | `gpu_count_fragmentation` | Time-weighted free GPU slots unusable for pending count demands. | minimize |
 | `gpu-memory-fragmentation` | `gpu_memory_fragmentation` | Time-weighted free memory unusable for pending placement demands. | minimize |
