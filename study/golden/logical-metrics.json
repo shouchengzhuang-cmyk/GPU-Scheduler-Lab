@@ -43,7 +43,7 @@
         "topology_requirement_violation_count": 0
       },
       "scenario": "scenarios/demo.yaml",
-      "scenario_sha256": "1499d0678e8a98ea9a14f2c6eedc4b934cb484ef49932765a8d96af125acd673",
+      "scenario_sha256": "4671ef4f474327c38141a82cc6791e55e451b8e8cd197249c035abc69c81df68",
       "scheduler": "fifo"
     },
     "revocable-recovery": {
@@ -66,7 +66,7 @@
         "simulation_horizon": 16.0
       },
       "scenario": "scenarios/revocable-fleet.yaml",
-      "scenario_sha256": "b8360b094c9659a47b0fd64595ee9a25cf1e3e464e1d1a9ff813e10bcade3fe9",
+      "scenario_sha256": "e503d9620ff1b3c3c8f30c0e6a84ffb32805c48c689c699bcf73d73e6e692189",
       "scheduler": "historical-drf"
     },
     "tenant-reclaim": {
@@ -96,7 +96,7 @@
         "simulation_horizon": 27.0
       },
       "scenario": "scenarios/multi-tenant-borrow-reclaim.yaml",
-      "scenario_sha256": "61c3a2086f2d672ef1d5d135792aa49812eb397d11ae51f498a174a70958e833",
+      "scenario_sha256": "bf7404c5507fdae37dc53bdfff541481858a19b3cd4dbdcbdeef1eb37402bbfb",
       "scheduler": "fairshare-reclaim"
     }
   },

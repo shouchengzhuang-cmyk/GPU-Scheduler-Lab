@@ -129,5 +129,5 @@ def test_high_preemption_cost_can_be_worse_than_fifo() -> None:
     fifo = Simulator(scenario.cluster, scenario.jobs, FIFOScheduler()).run()
     preemptive = Simulator(scenario.cluster, scenario.jobs, PreemptiveScheduler()).run()
 
-    assert preemptive.metrics["average_waiting_time"] > fifo.metrics["average_waiting_time"]
+    assert preemptive.metrics["average_turnaround_time"] > fifo.metrics["average_turnaround_time"]
     assert preemptive.metrics["preemption_overhead_ratio"] > 0
