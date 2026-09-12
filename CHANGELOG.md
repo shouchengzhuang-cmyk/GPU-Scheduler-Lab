@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-12
+
+### Changed
+
+- Refreshed the canonical simulator evidence bundle after PR #26 defined `waiting_time` uniformly as arrival/submission to first start for fixed and elastic jobs.
+- Canonical reports now state that preemption, checkpoint, restart, post-start elastic execution, and later suspension belong to turnaround or overhead metrics rather than queue wait.
+- Historical pre-correction p95 wait values are retained only as historical context and are not numerically comparable to the refreshed canonical p95 values under an unchanged definition.
+
+### Security
+
+- This release remains `SIMULATED`; no real NVIDIA GPU, Ascend hardware, CUDA/NCCL, Kubernetes production, or deployment validation is claimed.
+
 ## [0.4.0] - 2026-09-03
 
 ### Added

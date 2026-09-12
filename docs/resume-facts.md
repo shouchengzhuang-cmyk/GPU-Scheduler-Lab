@@ -17,7 +17,12 @@
 - 该 bundle 生成 3 张 CSV 表、3 张 PNG 图、Markdown report，并由 `hashes.sha256` 验证 373 个产物；manifest 记录 `dirty_tree: false`。
 - Mini AI Cloud v1 输入具有 JSON Schema、golden/breaking compatibility fixtures、未知字段审计、CPU-only/health filter、时间/优先级/model/topology 映射；结果 handoff 固定标记 `SIMULATED`。
 
-## Formal baseline snapshot
+## Historical baseline snapshot (pre queue-wait semantic correction)
+
+The following table was generated before PR #26 changed canonical `waiting_time` to
+`first_start_time - arrival_time`. It is retained only as historical context; its
+`P95 wait` values are **not** current canonical evidence and must not be compared
+numerically with post-#26 values as though the metric definition were unchanged.
 
 下表来自正式 bundle 的 `summary.json`，每项为 3 个 seed 的 mean 与 population stddev：
 
@@ -28,7 +33,12 @@
 | historical-drf | 1.0000 ± 0 | 0.784393 ± 0.039683 | 443.754 ± 77.286 | 0.979657 ± 0.006574 |
 | fairshare-reclaim | 1.0000 ± 0 | 0.760870 ± 0.041686 | 436.073 ± 67.585 | 0.976258 ± 0.005328 |
 
-这些数值只描述冻结的 synthetic workload family。它们不证明某策略在真实集群中更快，也不构成统计显著性结论。
+The authoritative post-#26 canonical results are the `report.md`, summaries, manifest,
+and hashes in the refreshed release study bundle. The report defines `p95_waiting_time`
+as queue delay from arrival/submission to first start; later preemption, checkpoint,
+restart, elastic execution, and suspension effects belong to turnaround or overhead
+metrics. All values only describe a frozen synthetic workload family. They do not prove
+that any policy is faster on a real cluster or establish statistical significance.
 
 ## Limitations
 

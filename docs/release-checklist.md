@@ -1,10 +1,10 @@
-# GPU Scheduler Lab 0.4.0 release checklist
+# GPU Scheduler Lab 0.4.1 release checklist
 
-本清单只准备 `0.4.0` release candidate。完成勾选不自动授权 tag、GitHub Release 或部署。
+本清单只准备 `0.4.1` release candidate。完成勾选不自动授权 tag、GitHub Release 或部署。
 
 ## Identity and contracts
 
-- [ ] `pyproject.toml`、`gpu_scheduler_lab.__version__`、README 和 wheel metadata 都是 `0.4.0`。
+- [ ] `pyproject.toml`、`gpu_scheduler_lab.__version__`、README 和 wheel metadata 都是 `0.4.1`。
 - [ ] Mini AI Cloud 输入 v1/v2 与 result handoff v1 schema 可解析。
 - [ ] v1/v2 golden fixture 完整导入，breaking fixture 明确失败。
 - [ ] 输出 JSON 固定标记 `evidence_kind: SIMULATED`。
@@ -24,6 +24,7 @@ make reproduce-study
 - [ ] `build/study/canonical/manifest.json` 的 `git.sha` 与该 commit 一致，`dirty_tree` 为 false。
 - [ ] `python -m gpu_scheduler_lab study verify --input build/study/canonical` 通过。
 - [ ] 正式报告的表格、图、Markdown 和 `hashes.sha256` 来自同一 summary。
+- [ ] 正式报告明确 `p95_waiting_time` 是 arrival/submission 到 first start 的 queue delay；旧 p95 不能当作未变口径的当前证据比较。
 - [ ] wheel 在隔离虚拟环境安装，`gpu-scheduler-lab --help` 和 package version 检查通过。
 
 ## Evidence boundary and publication

@@ -46,6 +46,8 @@ def test_report_bundle_is_summary_backed_hashed_and_tamper_evident(tmp_path: Pat
         "## Reproducibility instructions",
     ):
         assert heading in text
+    assert "defined as first start time minus" in text
+    assert "Preemption, checkpoint, restart" in text
     first_mean = json.loads(study.summary_json.read_text(encoding="utf-8"))["summary"][0]["mean"]
     assert f"{float(first_mean):.6g}" in text
     verified = verify_hash_manifest(study.output_directory)
