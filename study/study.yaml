@@ -24,7 +24,10 @@ metrics:
     source_metric: p95_waiting_time
     unit: logical-time
     direction: minimize
-    description: 95th percentile of completed-job waiting time.
+    description: >-
+      95th percentile of completed-job queue delay, defined as first start time minus
+      arrival time. Preemption, checkpoint, restart, elastic execution after first
+      start, and later suspension are reported through turnaround and overhead metrics.
   - id: completion-rate
     source_metric: completion_rate
     unit: ratio

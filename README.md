@@ -4,7 +4,7 @@ GPU Scheduler Lab 是一个可复现、可测试、可 benchmark 的 GPU 集群�
 
 它是调度算法实验室，不连接真实 NVIDIA GPU、CUDA 或 Kubernetes，也不是生产调度器。
 
-Python distribution 与主 CLI 均使用 `gpu-scheduler-lab`，当前 release 准备版本为 `0.4.0`；`python -m gpu_scheduler_lab` 是等价模块入口。仓库只准备 release commit，不自动创建 tag 或 GitHub Release。
+Python distribution 与主 CLI 均使用 `gpu-scheduler-lab`，当前 release 准备版本为 `0.4.1`；`python -m gpu_scheduler_lab` 是等价模块入口。仓库只准备 release commit，不自动创建 tag 或 GitHub Release。
 
 ## Research question
 
@@ -341,6 +341,9 @@ python -m gpu_scheduler_lab compare \
 
 脚本输出实际 wall time 和模拟指标，不把 in-process simulator throughput 描述成生产 scheduler、数据库或真实 GPU 性能。
 
+The following 2026-08-25 scale-benchmark table predates PR #26's queue-wait semantic
+correction. Its `P95 wait` values are retained as historical benchmark context and are
+not directly numerically comparable with post-#26 canonical `p95_waiting_time` values.
 2026-08-25 在 Ubuntu 24.04 WSL、Python 3.12.3 上的固定 seed `20260825` 实测如下（100 Nodes / 800 GPUs / 10,000 Jobs；重新运行会因机器负载产生不同 wall time，但逻辑指标应一致）：
 
 | Scheduler | Simulator elapsed | Completion | Avg GPU util | Avg wait | P95 wait | Fragmentation | SLA violation |

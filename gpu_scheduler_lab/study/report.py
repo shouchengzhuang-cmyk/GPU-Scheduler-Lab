@@ -421,7 +421,10 @@ def _metric_lines(value: object) -> str:
         direction = item.get("direction")
         if not all(isinstance(entry, str) for entry in (identifier, unit, direction)):
             raise ValueError("study manifest metric is incomplete")
-        lines.append(f"- `{identifier}` ({unit}, {direction})")
+        description = item.get("description")
+        if not isinstance(description, str) or not description:
+            raise ValueError("study manifest metric is missing a description")
+        lines.append(f"- `{identifier}` ({unit}, {direction}): {description}")
     return "\n".join(lines)
 
 
